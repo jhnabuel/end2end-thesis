@@ -1,29 +1,34 @@
 import cv2
 import numpy as np
 import cv2.aruco as aruco
-from path_utils import load_path_points, find_grid_path, draw_grid_path, draw_grid
+from path_utils import load_path_points, find_grid_path, draw_grid_path, draw_grid, load_path_line
 
 
 def main():
     # Initialize the webcam (or use a video file path)
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
 
     # 1. Setup the ArUco Dictionary and Parameters
     aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
     parameters = aruco.DetectorParameters()
     detector = aruco.ArucoDetector(aruco_dict, parameters)
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    
     LOOKAHEAD_DISTANCE = 36
-    GRID_SIZE = 48
+    GRID_SIZE = 44
     REACH_THRESHOLD = GRID_SIZE
 
     # Load path and track which waypoint the robot is heading toward
     waypoints = load_path_points()
     current_wp_index = 0
-
+    cv2.namedWindow("Path Follower", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Path Follower", 1400, 1400) # Set a specific width and height
+    
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"Resolution set to: {width}x{height}")
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -87,8 +92,11 @@ def main():
                     else:
                         cv2.putText(frame, "PATH COMPLETE", (50, 50),
                                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
+                                    
+        draw_grid(frame,GRID_SIZE)
+        load_path_line(frame)
+ 
 
-        draw_grid(frame)
         cv2.imshow("Path Follower", frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
