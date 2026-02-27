@@ -3,6 +3,13 @@ import numpy as np
 from collections import deque
 
 
+def create_gridmap(width, height, grid_size):
+    grid = {}
+    
+    for i in range(width/grid_size):
+        for j in range(height / grid_size):
+            grid[(i,j)] = f"({i},{j})"
+            
 def get_first_path_point():
     with open('path.txt', 'r') as f:
         line = f.readline().strip()
@@ -21,8 +28,12 @@ def load_path_points():
                 points.append((x, y))
     return points
 
-
-def find_grid_path(start_px, target_px, grid_size=48):
+def load_path_line(frame):
+    points = load_path_points()
+    for i in range(len(points) - 1):
+        cv2.line(frame, points[i], points[i+1], (255, 165, 0), 1)
+        
+def find_grid_path(start_px, target_px, grid_size=128):
     """BFS from start pixel to the grid cell containing target pixel, moving through adjacent grids."""
     start_cell = (start_px[0] // grid_size, start_px[1] // grid_size)
     target_cell = (target_px[0] // grid_size, target_px[1] // grid_size)
@@ -77,11 +88,11 @@ def draw_grid_path(frame, grid_path, num_blocks=3):
         cv2.circle(frame, visible[-1], 5, (255, 0, 255), -1)
 
 
-def draw_grid(frame, grid_size=48):
+def draw_grid(frame, grid_size=64):
     height, width, _ = frame.shape
-    for x in range(0, width, grid_size):
+    for x in range(0, height, grid_size):
         cv2.line(frame, (x, 0), (x, height), (255, 255, 255), 1)
-    for y in range(0, height, grid_size):
+    for y in range(0, width, grid_size):
         cv2.line(frame, (0, y), (width, y), (255, 255, 255), 1)
 
 
