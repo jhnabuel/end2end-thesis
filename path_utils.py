@@ -5,9 +5,8 @@ from collections import deque
 
 def create_gridmap(width, height, grid_size):
     grid = {}
-    
-    for i in range(width/grid_size):
-        for j in range(height / grid_size):
+    for i in range(width//grid_size):
+        for j in range(height // grid_size):
             grid[(i,j)] = f"({i},{j})"
             
 def get_first_path_point():
@@ -20,12 +19,15 @@ def get_first_path_point():
 def load_path_points():
     """Load all waypoints from path.txt."""
     points = []
-    with open('path.txt', 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                x, y = map(int, line.split(','))
-                points.append((x, y))
+    try:
+        with open('path.txt', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    x, y = map(int, line.split(','))
+                    points.append((x, y))
+    except FileNotFoundError:
+        pass
     return points
 
 def load_path_line(frame):
