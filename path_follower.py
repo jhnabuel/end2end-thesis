@@ -3,6 +3,16 @@ import numpy as np
 import cv2.aruco as aruco
 from path_utils import load_path_points, find_grid_path, draw_grid_path, draw_grid, load_path_line
 
+def pixel_to_cell(x, y, grid_size):
+    """Convert pixel coords to grid cell (col, row)."""
+    return (x // grid_size, y // grid_size)
+
+
+def cell_center(col, row, grid_size):
+    """Return pixel center of a grid cell."""
+    return (col * grid_size + grid_size // 2,
+            row * grid_size + grid_size // 2)
+
 
 def main():
     # Initialize the webcam (or use a video file path)
@@ -18,17 +28,21 @@ def main():
     
     LOOKAHEAD_DISTANCE = 36
     GRID_SIZE = 44
-    REACH_THRESHOLD = GRID_SIZE
 
     # Load path and track which waypoint the robot is heading toward
-    waypoints = load_path_points()
+    raw_waypoints = load_path_points()
+    path_cells = [pixel_to_cell(x,y, GRID_SIZE) for x, y, in raw_waypoints]
+    path_cells = [c for i, c in enumerate(path_cells) if i == 0 or c != path_cells[i-1]]
+
     current_wp_index = 0
+
     cv2.namedWindow("Path Follower", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Path Follower", 1400, 1400) # Set a specific width and height
     
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"Resolution set to: {width}x{height}")
+    print(f"Path loaded : {len(path_cells)} grid cells")
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -47,13 +61,12 @@ def main():
                 center_x = int(np.mean(c[:, 0]))
                 center_y = int(np.mean(c[:, 1]))
                 center_pt = (center_x, center_y)
+                car_cell = pixel_to_cell(center_x, center_y, GRID_SIZE)
 
                 # Calculate Front Midpoint (top edge is "forward")
                 front_x = int((c[0][0] + c[1][0]) / 2)
                 front_y = int((c[0][1] + c[1][1]) / 2)
-                top_mid_x = int((c[0][0] + c[1][0]) / 2)
-                top_mid_y = int((c[0][1] + c[1][1]) / 2)
-                top_mid_pt = (top_mid_x, top_mid_y)
+                top_mid_pt = (front_x, front_y)
 
                 # Heading Vector
                 dx = front_x - center_x
@@ -64,34 +77,34 @@ def main():
                     norm_dx = dx / magnitude
                     norm_dy = dy / magnitude
 
-                    lookahead_x = int(top_mid_x + (norm_dx * LOOKAHEAD_DISTANCE))
-                    lookahead_y = int(top_mid_y + (norm_dy * LOOKAHEAD_DISTANCE))
+                    lookahead_x = int(front_x + (norm_dx * LOOKAHEAD_DISTANCE))
+                    lookahead_y = int(front_y + (norm_dy * LOOKAHEAD_DISTANCE))
                     lookahead_pt = (lookahead_x, lookahead_y)
 
                     cv2.line(frame, top_mid_pt, lookahead_pt, (0, 255, 0), 4)
                     cv2.circle(frame, lookahead_pt, 8, (0, 0, 255), -1)
                     cv2.putText(frame, f"({lookahead_x}, {lookahead_y})", (lookahead_x + 10, lookahead_y),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-
-                # Draw grid guide toward current waypoint
-                if current_wp_index < len(waypoints):
-                    target_pt = waypoints[current_wp_index]
-                    dist_to_target = np.hypot(center_x - target_pt[0], center_y - target_pt[1])
-
-                    if dist_to_target < REACH_THRESHOLD:
+                
+                if path_cells:
+                    while current_wp_index < len(path_cells) and car_cell == path_cells[current_wp_index]:
                         current_wp_index += 1
+                    
+                    if current_wp_index < len(path_cells):
+                        target_cell = path_cells[current_wp_index]
+                        target_pt = cell_center(*target_cell, GRID_SIZE)
 
-                    if current_wp_index < len(waypoints):
-                        target_pt = waypoints[current_wp_index]
-                        grid_path = find_grid_path(center_pt, target_pt, grid_size=GRID_SIZE)
-                        if grid_path:
-                            draw_grid_path(frame, grid_path, num_blocks=2)
-                        cv2.circle(frame, target_pt, 10, (0, 165, 255), -1)
-                        cv2.putText(frame, f"WP{current_wp_index}", (target_pt[0] + 12, target_pt[1]),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
-                    else:
-                        cv2.putText(frame, "PATH COMPLETE", (50, 50),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
+                        current_cell_pt = cell_center(*car_cell, GRID_SIZE)
+                        cv2.line(frame, current_cell_pt, target_pt, (0, 165, 255), 2)
+                        cv2.circle(frame, current_cell_pt, 5, (0, 165, 255), -1)
+                        cv2.circle(frame, target_pt, 5, (0, 165, 255), -1)
+                else:
+                    cv2.putText(frame, "PATH COMPLETE", (50, 50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
+                
+                cv2.putText(frame, f"Car cell: {car_cell}",
+                            (8, frame.shape[0] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
                                     
         draw_grid(frame,GRID_SIZE)
         load_path_line(frame)
