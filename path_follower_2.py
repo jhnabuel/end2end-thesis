@@ -6,7 +6,10 @@ from path_utils import load_path_points, find_grid_path, draw_grid_path, draw_gr
 def pixel_to_cell(x, y, grid_size):
     """Convert pixel coords to grid cell (col, row)."""
     return (x // grid_size, y // grid_size)
-
+    
+def cell_to_pixel(x, y, grid_size):
+    """Convert grid cell to top-left pixel position."""
+    return (x * grid_size, y * grid_size)
 
 def cell_center(col, row, grid_size):
     """Return pixel center of a grid cell."""
@@ -42,6 +45,7 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"Resolution set to: {width}x{height}")
     print(f"Path loaded : {len(path_cells)} grid cells")
+    print(path_cells)
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -84,33 +88,47 @@ def main():
                     cv2.circle(frame, lookahead_pt, 8, (0, 0, 255), -1)
                     cv2.putText(frame, f"({lookahead_x}, {lookahead_y})", (lookahead_x + 10, lookahead_y),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                
-                if path_cells:
-                    while current_wp_index < len(path_cells) and car_cell == path_cells[current_wp_index]:
-                        current_wp_index += 1
+    
                     
-                    if current_wp_index < len(path_cells):
-                        target_cell = path_cells[current_wp_index]
-                        target_pt = cell_center(*target_cell, GRID_SIZE)
-        
-                        current_cell_pt = cell_center(*car_cell, GRID_SIZE)
-                        cv2.line(frame, current_cell_pt, target_pt, (0, 165, 255), 2)
+                target_offset = 2  # change this dynamically
+
+                if car_cell in path_cells:
+                    i = path_cells.index(car_cell)
+
+                    if i + target_offset < len(path_cells):
+
+                        current_cell_pt = center_pt
+
+                        # draw path progressively
+                        prev_pt = current_cell_pt
+
+                        for step in range(1, target_offset + 1):
+                            next_cell = path_cells[i + step]
+                            next_pt = cell_center(*next_cell, GRID_SIZE)
+
+                            cv2.line(frame, prev_pt, next_pt, (0, 165, 255), 2)
+                            cv2.circle(frame, next_pt, 5, (0, 165, 255), -1)
+
+                            prev_pt = next_pt
+                            
+                            
                         cv2.circle(frame, current_cell_pt, 5, (0, 165, 255), -1)
-                        cv2.circle(frame, target_pt, 5, (0, 165, 255), -1)
-                else:
-                    cv2.putText(frame, "PATH COMPLETE", (50, 50),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
-                
+                    else:
+                        next_value = None
+
+ 
+
+
                 cv2.putText(frame, f"Car cell: {car_cell}",
                             (8, frame.shape[0] - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-                                    
+    
         draw_grid(frame,GRID_SIZE)
         load_path_line(frame)
         
-
+        
         cv2.imshow("Path Follower", frame)
-
+        
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
@@ -121,3 +139,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
