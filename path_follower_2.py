@@ -17,9 +17,77 @@ def cell_center(col, row, grid_size):
             row * grid_size + grid_size // 2)
 
 
+def project_onto_polyline(px, py, polyline):
+    """Project point (px,py) onto a polyline. Returns (segment_index, t, proj_x, proj_y, cumulative_dist)."""
+    best_dist = float('inf')
+    best_seg = 0
+    best_t = 0.0
+    best_proj = polyline[0]
+
+    for i in range(len(polyline) - 1):
+        ax, ay = polyline[i]
+        bx, by = polyline[i + 1]
+        abx, aby = bx - ax, by - ay
+        ab_len2 = abx * abx + aby * aby
+        if ab_len2 == 0:
+            t = 0.0
+        else:
+            t = max(0.0, min(1.0, ((px - ax) * abx + (py - ay) * aby) / ab_len2))
+        proj_x = ax + t * abx
+        proj_y = ay + t * aby
+        d = np.hypot(px - proj_x, py - proj_y)
+        if d < best_dist:
+            best_dist = d
+            best_seg = i
+            best_t = t
+            best_proj = (proj_x, proj_y)
+
+    # Cumulative distance up to projection point
+    cum = 0.0
+    for i in range(best_seg):
+        cum += np.hypot(polyline[i + 1][0] - polyline[i][0],
+                        polyline[i + 1][1] - polyline[i][1])
+    cum += np.hypot(best_proj[0] - polyline[best_seg][0],
+                    best_proj[1] - polyline[best_seg][1])
+
+    return best_seg, best_t, best_proj[0], best_proj[1], cum
+
+
+def sample_polyline_ahead(polyline, start_dist, length, num_points=20):
+    """Sample num_points evenly spaced along polyline from start_dist to start_dist+length."""
+    # Build cumulative distances
+    cum_dists = [0.0]
+    for i in range(len(polyline) - 1):
+        cum_dists.append(cum_dists[-1] + np.hypot(
+            polyline[i + 1][0] - polyline[i][0],
+            polyline[i + 1][1] - polyline[i][1]))
+    total_len = cum_dists[-1]
+
+    end_dist = min(start_dist + length, total_len)
+    if end_dist <= start_dist:
+        return []
+
+    points = []
+    for k in range(num_points + 1):
+        d = start_dist + (end_dist - start_dist) * k / num_points
+        # Find which segment this distance falls on
+        for i in range(len(cum_dists) - 1):
+            if cum_dists[i + 1] >= d:
+                seg_len = cum_dists[i + 1] - cum_dists[i]
+                if seg_len > 0:
+                    t = (d - cum_dists[i]) / seg_len
+                else:
+                    t = 0.0
+                x = polyline[i][0] + t * (polyline[i + 1][0] - polyline[i][0])
+                y = polyline[i][1] + t * (polyline[i + 1][1] - polyline[i][1])
+                points.append((int(x), int(y)))
+                break
+    return points
+
+
 def main():
     # Initialize the webcam (or use a video file path)
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
 
     # 1. Setup the ArUco Dictionary and Parameters
     aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
@@ -36,7 +104,11 @@ def main():
     path_cells = [pixel_to_cell(x,y, GRID_SIZE) for x, y, in raw_waypoints]
     path_cells = [c for i, c in enumerate(path_cells) if i == 0 or c != path_cells[i-1]]
     
-    current_wp_index = 0
+    
+    
+    # Build pixel polyline from cell centers
+    path_polyline = [cell_center(*c, GRID_SIZE) for c in path_cells]
+    PATH_VIEW_LENGTH = GRID_SIZE * 2  # how far ahead (pixels) the "driver" can see
     
     cv2.namedWindow("Path Follower", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Path Follower", 1400, 1400) # Set a specific width and height
@@ -45,7 +117,7 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"Resolution set to: {width}x{height}")
     print(f"Path loaded : {len(path_cells)} grid cells")
-    print(path_cells)
+    print(path_polyline)
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -90,33 +162,23 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
     
                     
-                target_offset = 2  # change this dynamically
+                # --- Project car onto path polyline for smooth tracking ---
+                seg, t, proj_x, proj_y, car_dist = project_onto_polyline(
+                    center_x, center_y, path_polyline)
+                current_wp_index = seg
 
-                if car_cell in path_cells:
-                    i = path_cells.index(car_cell)
+                # Sample the visible portion of the road ahead
+                visible_pts = sample_polyline_ahead(
+                    path_polyline, car_dist, PATH_VIEW_LENGTH, num_points=5)
 
-                    if i + target_offset < len(path_cells):
-
-                        current_cell_pt = center_pt
-
-                        # draw path progressively
-                        prev_pt = current_cell_pt
-
-                        for step in range(1, target_offset + 1):
-                            next_cell = path_cells[i + step]
-                            next_pt = cell_center(*next_cell, GRID_SIZE)
-
-                            cv2.line(frame, prev_pt, next_pt, (0, 165, 255), 2)
-                            cv2.circle(frame, next_pt, 5, (0, 165, 255), -1)
-
-                            prev_pt = next_pt
-                            
-                            
-                        cv2.circle(frame, current_cell_pt, 5, (0, 165, 255), -1)
-                    else:
-                        next_value = None
-
- 
+                if len(visible_pts) >= 2:
+                    # Draw from car position to the sampled road ahead
+                    all_pts = visible_pts
+                    for j in range(len(all_pts) - 1):
+                        cv2.line(frame, all_pts[j], all_pts[j + 1], (0, 165, 255), 2)
+                        cv2.circle(frame, all_pts[j], 5, (0, 165, 255), -1)
+                    cv2.circle(frame, visible_pts[0], 5, (0, 165, 255), -1)
+                    cv2.circle(frame, visible_pts[-1], 5, (0, 165, 255), -1)
 
 
                 cv2.putText(frame, f"Car cell: {car_cell}",
