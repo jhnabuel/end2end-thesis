@@ -87,7 +87,7 @@ def sample_polyline_ahead(polyline, start_dist, length, num_points=20):
 
 def main():
     # Initialize the webcam (or use a video file path)
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
 
     # 1. Setup the ArUco Dictionary and Parameters
     aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
@@ -155,6 +155,7 @@ def main():
                     lookahead_x = int(front_x + (norm_dx * LOOKAHEAD_DISTANCE))
                     lookahead_y = int(front_y + (norm_dy * LOOKAHEAD_DISTANCE))
                     lookahead_pt = (lookahead_x, lookahead_y)
+                
 
                     cv2.line(frame, top_mid_pt, lookahead_pt, (0, 255, 0), 4)
                     cv2.circle(frame, lookahead_pt, 8, (0, 0, 255), -1)
@@ -169,16 +170,57 @@ def main():
 
                 # Sample the visible portion of the road ahead
                 visible_pts = sample_polyline_ahead(
-                    path_polyline, car_dist, PATH_VIEW_LENGTH, num_points=5)
+                    path_polyline, car_dist, PATH_VIEW_LENGTH, num_points=1000)
+                
+                car_to_path_dist = np.hypot(center_x - int(proj_x), center_y - int(proj_y))
+                # print(f"car distance to path: {car_to_path_dist}")
+                if car_to_path_dist < GRID_SIZE / 2:
+                    
+                    # cv2.line(frame,(center_x,center_y), (int(proj_x), int(proj_y)), (0, 165, 255), 1)
+                    if len(visible_pts) >= 2:
+                        ROAD_WIDTH = GRID_SIZE * 0.50
+                        HALF_WIDTH = ROAD_WIDTH / 2
+                        # Draw from car position to the sampled road ahead
+                        all_pts = visible_pts
+                        for j in range(len(all_pts) - 1):
 
-                if len(visible_pts) >= 2:
-                    # Draw from car position to the sampled road ahead
-                    all_pts = visible_pts
-                    for j in range(len(all_pts) - 1):
-                        cv2.line(frame, all_pts[j], all_pts[j + 1], (0, 165, 255), 2)
-                        cv2.circle(frame, all_pts[j], 5, (0, 165, 255), -1)
-                    cv2.circle(frame, visible_pts[0], 5, (0, 165, 255), -1)
-                    cv2.circle(frame, visible_pts[-1], 5, (0, 165, 255), -1)
+                            pt1 = visible_pts[j]
+                            pt2 = visible_pts[j + 1]
+                            
+                            path_dx = pt2[0] - pt1[0]
+                            path_dy = pt2[1] - pt1[1]
+                            length = np.hypot(path_dx, path_dy)
+
+                            if length > 0:
+                                norm_px = path_dx / length
+                                norm_py = path_dy / length
+
+
+                                perp_px = -norm_py
+                                perp_py = norm_px
+
+                                l1_x = int(pt1[0] + (perp_px * HALF_WIDTH))
+                                l1_y = int(pt1[1] + (perp_py * HALF_WIDTH))
+                                
+                                r1_x = int(pt1[0] - (perp_px * HALF_WIDTH))
+                                r1_y = int(pt1[1] - (perp_py * HALF_WIDTH))
+
+                                l2_x = int(pt2[0] + (perp_px * HALF_WIDTH))
+                                l2_y = int(pt2[1] + (perp_py * HALF_WIDTH))
+
+                                r2_x = int(pt2[0] - (perp_px * HALF_WIDTH))
+                                r2_y = int(pt2[1] - (perp_py * HALF_WIDTH))
+
+                                cv2.line(frame, (l1_x, l1_y), (l2_x, l2_y), (0, 165, 255), 1)
+                                cv2.line(frame, (r1_x, r1_y), (r2_x, r2_y), (0, 165, 255), 1)
+
+                                # cv2.circle(frame, pt1, 4, (255, 255, 255), -1)
+
+                            # cv2.line(frame, all_pts[j], all_pts[j + 1], (0, 165, 255), 2)
+                            # cv2.circle(frame, all_pts[j], 5, (0, 165, 255), -1)
+                            
+                        # cv2.circle(frame, visible_pts[0], 5, (0, 165, 255), -1)
+                        # cv2.circle(frame, visible_pts[-1], 5, (0, 165, 255), -1)
 
 
                 cv2.putText(frame, f"Car cell: {car_cell}",
