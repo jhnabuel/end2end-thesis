@@ -27,7 +27,7 @@ def load_path_polyline(grid_size):
 
 
 def main():
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     GRID_SIZE = 64
 
     path_polyline = load_path_polyline(GRID_SIZE)

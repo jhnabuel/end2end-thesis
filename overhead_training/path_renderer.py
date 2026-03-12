@@ -79,8 +79,8 @@ def chaikin_smooth(pts, iterations=3):
 
 
 class PathRenderer:
-    def __init__(self, path_polyline, grid_size=44, road_color=(255, 255, 255),
-                 forward_px=200, backward_px=80):
+    def __init__(self, path_polyline,detector, grid_size=44, road_color=(255, 255, 255),
+                 forward_px=200, backward_px=80, ):
         self.path_polyline = np.array(path_polyline, dtype=np.float64)
         self.grid_size = grid_size
         self.track_thickness = int(grid_size * 0.70)
@@ -93,9 +93,7 @@ class PathRenderer:
         self.total_arc = np.sum(np.linalg.norm(diffs, axis=1))
 
         # ArUco detection
-        aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
-        self.detector = aruco.ArucoDetector(aruco_dict, aruco.DetectorParameters())
-
+        self.detector = detector
         # State for surviving brief detection drops
         self.last_corners = None
         self.frames_lost = 0

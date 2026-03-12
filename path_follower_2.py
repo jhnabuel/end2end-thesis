@@ -87,7 +87,7 @@ def sample_polyline_ahead(polyline, start_dist, length, num_points=20):
 
 def main():
     # Initialize the webcam (or use a video file path)
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
 
     # 1. Setup the ArUco Dictionary and Parameters
     aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
