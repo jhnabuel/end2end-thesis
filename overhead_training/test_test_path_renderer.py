@@ -2,9 +2,8 @@ import cv2
 import sys
 import os
 import pickle
-import threading
 import time
-from flask import Flask, Response, render_template_string
+import threading
 
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
@@ -14,64 +13,24 @@ from overhead_training.robot_aoi import generate_arena
 from path_utils import load_path_points
 from path_renderer import PathRenderer
 import cv2.aruco as aruco
+from flask import Flask, Response, render_template_string
 
 app = Flask(__name__)
 
+#streaming globals
 output_frame = None
 lock = threading.Lock()
-frame_event = threading.Event()  # signals when a new frame is ready
 
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
-<head>
-  <title>Path View</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: #0a0a0a;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      font-family: monospace;
-    }
-    #feed {
-      max-width: 100%;
-      max-height: 90vh;
-      border: 1px solid #222;
-      display: block;
-    }
-    #status {
-      color: #444;
-      font-size: 11px;
-      margin-top: 8px;
-      letter-spacing: 0.1em;
-    }
-    #status.live { color: #0f0; }
-    #status.error { color: #f44; }
-  </style>
-</head>
-<body>
-  <img id="feed" src="/video_feed"
-       onload="setStatus('LIVE', true)"
-       onerror="setStatus('RECONNECTING...', false); setTimeout(reloadFeed, 1000)"/>
-  <div id="status">CONNECTING...</div>
-  <script>
-    function setStatus(msg, live) {
-      var s = document.getElementById('status');
-      s.textContent = msg;
-      s.className = live ? 'live' : 'error';
-    }
-    function reloadFeed() {
-      var img = document.getElementById('feed');
-      img.src = '/video_feed?' + Date.now();
-    }
-  </script>
+<head><title>Path View</title></head>
+<body style="background:#111;display:flex;justify-content:center;align-items:center;height:100vh;margin:0">
+    <img src="/video_feed" style="max-width:100%;max-height:100vh"/>
 </body>
 </html>
 """
+
 
 def pixel_to_cell(x, y, grid_size):
     return (x // grid_size, y // grid_size)
@@ -87,16 +46,12 @@ def load_path_polyline(grid_size):
     cells = [c for i, c in enumerate(cells) if i == 0 or c != cells[i-1]]
     return [cell_center(*c, grid_size) for c in cells]
 
-def processVideo():
+def main():
     global output_frame
-
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("ERROR: Cannot open camera")
         return
-
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    cap.set(cv2.CAP_PROP_FPS, 30)
 
     with open("calibration.pkl", "rb") as f:
         calib = pickle.load(f)
@@ -105,36 +60,34 @@ def processVideo():
 
     GRID_SIZE = 64
 
+    # Arena corners detector - 5x5 markers
     arena_dict = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
     arena_detector = aruco.ArucoDetector(arena_dict, aruco.DetectorParameters())
 
+    # Car marker detector - 4x4 markers (separate!)
     car_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
     car_detector = aruco.ArucoDetector(car_dict, aruco.DetectorParameters())
 
     path_polyline = load_path_polyline(GRID_SIZE)
     if len(path_polyline) < 2:
-        print("ERROR: Need at least 2 path points.")
+        print("ERROR: Need at least 2 path points. Draw a path first.")
         cap.release()
         return
 
+    # Pass car_detector, NOT arena_detector
     renderer = PathRenderer(path_polyline=path_polyline, detector=car_detector, grid_size=GRID_SIZE)
-
-    h, w = 480, 640
-    map1, map2 = cv2.initUndistortRectifyMap(
-        camera_matrix, dist_coeffs, None, camera_matrix, (w, h), cv2.CV_16SC2
-    )
 
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("WARN: Frame read failed, retrying...")
-            time.sleep(0.05)
+            print("Frame read failed, retrying...")
+            time.sleep(0.2)
             continue
 
-        frame = cv2.resize(frame, (w, h))
-        frame = cv2.remap(frame, map1, map2, cv2.INTER_LINEAR)
-
+        frame = cv2.resize(frame, (640, 480))
+        frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
         corners, ids, _ = arena_detector.detectMarkers(gray)
         warped = generate_arena(frame, corners, ids)
 
@@ -144,35 +97,34 @@ def processVideo():
             out, _ = renderer.generate_cnn_frame(warped)
             renderer.draw_debug(out)
             display = out
-
         with lock:
-            output_frame = display
+            output_frame = display.copy()
 
-        frame_event.set()
-        frame_event.clear()
-
-    cap.release()
+        #cap.release()
 
 def generateMjpeg():
     global output_frame
-    encode_params = [cv2.IMWRITE_JPEG_QUALITY, 80]
-
     while True:
-        frame_event.wait(timeout=1.0)
-
         with lock:
-            if output_frame is None:
-                continue
-            local_frame = output_frame.copy()
-
-        ret, buffer = cv2.imencode(".jpg", local_frame, encode_params)
-        if not ret:
+            if output_frame is not None:
+                local_frame = output_frame.copy()
+            else:
+                local_frame = None
+            
+        if local_frame is not None:
+            ret, buffer = cv2.imencode(".jpg", local_frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+            if ret:
+                yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
+                    )   
+                
+        else:
+            time.sleep(0.2)
             continue
-
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-        )
+    
+        time.sleep(0.3)
+        
 
 @app.route("/")
 def index():
@@ -182,10 +134,10 @@ def index():
 def video_feed():
     return Response(
         generateMjpeg(),
-        mimetype="multipart/x-mixed-replace; boundary=frame"
+        mimetype = "multipart/x-mixed-replace; boundary=frame"
     )
 
 if __name__ == "__main__":
-    t = threading.Thread(target=processVideo, daemon=True)
+    t = threading.Thread(target=main, daemon=True)
     t.start()
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    app.run(host = "0.0.0.0", port = 5000, debug = False)
