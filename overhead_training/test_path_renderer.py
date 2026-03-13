@@ -1,11 +1,11 @@
 import cv2
 import sys
 import os
+import pickle
 
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 os.chdir(parent_dir)
-
 
 from overhead_training.robot_aoi import generate_arena
 from path_utils import load_path_points
@@ -34,6 +34,10 @@ def main():
         return
 
     GRID_SIZE = 64
+    with open("calibration.pkl", "rb") as f:
+        calib = pickle.load(f)
+    camera_matrix = calib["mtx"]
+    dist_coeffs = calib["dist"]
 
     # Arena corners detector - 5x5 markers
     arena_dict = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
@@ -61,12 +65,10 @@ def main():
         if not ret:
             break
         frame = cv2.resize(frame, (640, 480))
+        frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = arena_detector.detectMarkers(gray)
         warped = generate_arena(frame, corners, ids)
-        if warped is None:
-            cv2.imshow("Path View", frame)
-            continue
         out, _ = renderer.generate_cnn_frame(warped)
         renderer.draw_debug(out)
         cv2.imshow("Path View", out)

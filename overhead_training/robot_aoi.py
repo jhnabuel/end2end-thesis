@@ -8,7 +8,7 @@ def generate_arena(frame, corners, ids):
     bottomRightBig = None
 
     if ids is None:
-        return None
+        return frame
 
     flat_ids = ids.flatten()
     for (markerCorner, markerID) in zip(corners, flat_ids):
@@ -26,7 +26,7 @@ def generate_arena(frame, corners, ids):
                 bottomRightBig = [mcX, mcY]
 
     if None in (topLeftBig, topRightBig, bottomLeftBig, bottomRightBig):
-        return None
+        return frame
 
     sourcePts = np.float32([topLeftBig, topRightBig, bottomLeftBig, bottomRightBig])
     destPts = np.float32([[0, 0], [800, 0], [0, 800], [800, 800]])
