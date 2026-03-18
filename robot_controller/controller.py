@@ -1,45 +1,90 @@
 import pygame
+import cv2
 import socket
-HOST = ''
-PORT = ''
+import json
+import csv
+import os
+import time
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.connect((HOST, PORT))
-    s.sendall(b'Hello, world')
-    data = s.recv(1024)
+#rasberry pi's config
+PI_IP = ""
+PI_PORT = ""
 
-print(f'Received {data.decode()!r}')
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+#camera
+cap = cv2.VideoCapture(0)
+
+#resolution
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
 pygame.init()
-screen = pygame.display.set_mode((200, 200))
-pygame.display.set_caption("Test Input")
+pygame.joystick.init()
 
-clock = pygame.time.Clock()
-running = True
-dt = 0
-throttle = 0
-steering = 0
+if pygame.joystick.get_count() == 0:
+    print("No Controller Found")
+    exit()
 
-while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+joystick = pygame.joystick.Joystick(0)
+joystick.init()
+print(f"Connected to controller: {joystick.get_name()}")
 
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_w]:
-        throttle += 0.1 * dt
-    if keys[pygame.K_s]:
-        throttle -= 0.1 * dt
-    if keys[pygame.K_a]:
-        steering += 1 * dt
-    if keys[pygame.K_d]:
-        steering -= 1 * dt
+frame_count = 0
+TUB_PATH = "../data/tub_01"
 
-    pygame.display.flip()
+if not os.path.exists(TUB_PATH):
+    os.makedirs(TUB_PATH, exist_ok=True)
 
-    dt = clock.tick(60) / 1000
+print("Starting data collection, Press 'Q' on the video window or 'ESC' to stop")
+try:
+    while True:
+        pygame.event.pump()
+        steering = joystick.get_axis(0)
+        throttle = -joystick.get_axis(1)
+        if abs(steering) < 0.1: steering = 0.0
 
-    print(f"throttle: {throttle:.2f}, steering: {steering:.2f}")
+        command = {"steer": round(steering, 3), "throttle": round(throttle, 3)}
+        sock.sendto(json.dumps(command).encode('utf-8')) (PI_IP, PI_PORT)
 
-pygame.quit()
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to grab camera frame")
+            continue
+
+        if throttle != 0.0 or steering != 0.0:
+            image_filename = f"{frame_count}_cam-image_array_.jpg"
+            
+            image_filepath = os.path.join(TUB_PATH, image_filename)
+
+            cv2.imwrite(image_filepath, frame)
+
+            record = {
+                "cam/image_array": image_filename,
+                "user/angle": steering,
+                "user/throttle": throttle
+            }
+
+            json_filename = f"record_{frame_count}.json"
+            with open(os.path.join(TUB_PATH, json_filename), 'w') as f:
+                json.dump(record, f)
+            
+            frame_count += 1
+            
+        cv2.imshow("Overhead Camera Feed", frame)
+
+        if cv2.waitKey(1) & 0XFF == ord('q'):
+            break
+            
+        time.sleep(0.05)
+
+except KeyboardInterrupt:
+    print("Stopped by User")
+
+finally:
+    stop_command = {"steer" : 0.0, "throttle" : 0.0}
+    sock.sendto(json.dumps(stop_command))
+    cap.release()
+    cv2.destroyAllWindows()
+    pygame.quit()
+    print("Data collection complete-- shut down safely.")
