@@ -10,7 +10,7 @@ import time
 PI_IP = ""
 PI_PORT = ""
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+# sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 #camera
 cap = cv2.VideoCapture(0)
@@ -40,12 +40,12 @@ print("Starting data collection, Press 'Q' on the video window or 'ESC' to stop"
 try:
     while True:
         pygame.event.pump()
-        steering = joystick.get_axis(0)
+        steering = joystick.get_axis(3)
         throttle = -joystick.get_axis(1)
         if abs(steering) < 0.1: steering = 0.0
 
         command = {"steer": round(steering, 3), "throttle": round(throttle, 3)}
-        sock.sendto(json.dumps(command).encode('utf-8')) (PI_IP, PI_PORT)
+        # sock.sendto(json.dumps(command).encode('utf-8')) (PI_IP, PI_PORT)
 
         ret, frame = cap.read()
         if not ret:
@@ -83,7 +83,7 @@ except KeyboardInterrupt:
 
 finally:
     stop_command = {"steer" : 0.0, "throttle" : 0.0}
-    sock.sendto(json.dumps(stop_command))
+    # sock.sendto(json.dumps(stop_command))
     cap.release()
     cv2.destroyAllWindows()
     pygame.quit()
