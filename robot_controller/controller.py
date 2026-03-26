@@ -45,7 +45,7 @@ try:
         if abs(steering) < 0.1: steering = 0.0
 
         command = {"steer": round(steering, 3), "throttle": round(throttle, 3)}
-        # sock.sendto(json.dumps(command).encode('utf-8')) (PI_IP, PI_PORT)
+        sock.sendto(json.dumps(command).encode('utf-8')) (PI_IP, PI_PORT)
 
         ret, frame = cap.read()
         if not ret:
