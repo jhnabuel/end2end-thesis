@@ -27,7 +27,7 @@ def generate_arena(frame, corners, ids):
 
     if None in (topLeftBig, topRightBig, bottomLeftBig, bottomRightBig):
         return frame
-
+    
     sourcePts = np.float32([topLeftBig, topRightBig, bottomLeftBig, bottomRightBig])
     destPts = np.float32([[0, 0], [800, 0], [0, 800], [800, 800]])
 

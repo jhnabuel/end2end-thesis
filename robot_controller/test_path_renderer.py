@@ -2,8 +2,6 @@ import cv2
 import sys
 import os
 import pickle
-import time
-import threading
 
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
@@ -13,9 +11,6 @@ from overhead_training.robot_aoi import generate_arena
 from path_utils import load_path_points
 from path_renderer import PathRenderer
 import cv2.aruco as aruco
-
-
-
 
 def pixel_to_cell(x, y, grid_size):
     return (x // grid_size, y // grid_size)
@@ -31,26 +26,25 @@ def load_path_polyline(grid_size):
     cells = [c for i, c in enumerate(cells) if i == 0 or c != cells[i-1]]
     return [cell_center(*c, grid_size) for c in cells]
 
-def main():
-    global output_frame
+
+def main_path_renderer():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("ERROR: Cannot open camera")
         return
 
+    GRID_SIZE = 64
     with open("calibration.pkl", "rb") as f:
         calib = pickle.load(f)
     camera_matrix = calib["mtx"]
     dist_coeffs = calib["dist"]
-
-    GRID_SIZE = 64
 
     # Arena corners detector - 5x5 markers
     arena_dict = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
     arena_detector = aruco.ArucoDetector(arena_dict, aruco.DetectorParameters())
 
     # Car marker detector - 4x4 markers (separate!)
-    car_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+    car_dict = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
     car_detector = aruco.ArucoDetector(car_dict, aruco.DetectorParameters())
 
     path_polyline = load_path_polyline(GRID_SIZE)
@@ -62,57 +56,28 @@ def main():
     # Pass car_detector, NOT arena_detector
     renderer = PathRenderer(path_polyline=path_polyline, detector=car_detector, grid_size=GRID_SIZE)
 
+    cv2.namedWindow("Path View", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Path View", 1000, 1000)
+    print("Press 'q' to quit.")
+
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("Frame read failed, retrying...")
-            time.sleep(0.2)
-            continue
-
+            break
         frame = cv2.resize(frame, (640, 480))
         frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
         corners, ids, _ = arena_detector.detectMarkers(gray)
         warped = generate_arena(frame, corners, ids)
+        out, _ = renderer.generate_cnn_frame(warped)
+        renderer.draw_debug(out)
+        cv2.imshow("Path View", out)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+        yield out
 
-        if warped is None:
-            display = frame
-        else:
-            out, _ = renderer.generate_cnn_frame(warped)
-            renderer.draw_debug(out)
-            display = out
-        with lock:
-            output_frame = display.copy()
-
-        #cap.release()
-
-def generateMjpeg():
-    global output_frame
-    while True:
-        with lock:
-            if output_frame is not None:
-                local_frame = output_frame.copy()
-            else:
-                local_frame = None
-            
-        if local_frame is not None:
-            ret, buffer = cv2.imencode(".jpg", local_frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
-            if ret:
-                yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-                    )   
-                
-        else:
-            time.sleep(0.2)
-            continue
-    
-        time.sleep(0.3)
-        
-
+    cap.release()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    t = threading.Thread(target=main, daemon=True)
-    t.start()
-    main()
+    main_path_renderer()

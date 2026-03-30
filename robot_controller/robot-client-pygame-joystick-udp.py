@@ -4,8 +4,7 @@ import pygame
 import time
 from datetime import datetime
 import json
-from test_path_ren import main_path_renderer
-
+from test_path_renderer import main_path_renderer
 # --- Setup ---
 ROBOT_IP = '192.168.0.2'
 PORT     = 5000
@@ -31,7 +30,11 @@ font = pygame.font.SysFont("Arial", 24)
 
 
 # Connect using UDP 
-udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+except socket.error as e:
+    print(f"Error creating socket: {e}")
+    exit()
 
 def draw_text(text, x, y, color=WHITE):
     img = font.render(text, True, color)
@@ -41,7 +44,7 @@ record_index = 0
 catalog_index = 0
 current_session_id = ""
 last_record_time = 0
-catalog_file = f"catalog_{catalog_index}".catalog
+catalog_file = f"catalog_{catalog_index}.catalog"
 is_recording = False
 
 robot_data = {
@@ -69,8 +72,8 @@ try:
             raw_steer = joystick.get_axis(3)  # right stick, x axis
             is_turbo = joystick.get_button(5) # RB/R1
             is_stop = joystick.get_button(1)  # B/Circle
-
-            #start/stop recording logic
+            print(f"is_recording:{is_recording}")
+            #start/stop recording logic 
             for event in pygame.event.get():
                 if event.type == pygame.JOYBUTTONDOWN:
                     if event.button == 2:
@@ -86,9 +89,9 @@ try:
             multiplier = 1.0 if is_turbo else 0.5
             speed = int(raw_speed * 100 * multiplier) if abs(raw_speed) > DEADZONE else 0
             steering = int(raw_steer * 50) if abs(raw_steer) > DEADZONE else 0
-            
-            if is_stop: speed, steering = 0, 0
 
+            if is_stop: speed, steering = 0, 0
+            client.sendto(f"{speed},{steering}".encode(), (ROBOT_IP, PORT))
             #data logging (index, session_id, timestamp_ms, cam/image_array, angle, user_mode, throttle)
             current_time = time.time()
             current_date_str = datetime.now().strftime("%Y-%m-%d")
@@ -137,16 +140,12 @@ try:
             pygame.display.flip() # Update display
             
             
-            # # Send Data
-            # try:
-            #     udp_socket.sendto(f"{speed},{steering}".encode(), (ROBOT_IP, PORT))
-            # except Exception as net_error:
-            #     print(f"Send error: {net_error}")
+            
             
             time.sleep(0.05)
 
 except Exception as e:
     print(f"Error: {e}")
 finally:
-    udp_socket.close()
+    client.close()
     pygame.quit()
