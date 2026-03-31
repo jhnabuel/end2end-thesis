@@ -19,7 +19,8 @@ def project_onto_path(px, py, path):
         if seg_len < 1e-6:
             cumulative += seg_len
             continue
-        t = np.clip(np.dot(np.array([px, py], dtype=np.float64) - a, ab) / (seg_len * seg_len), 0.0, 1.0)
+        t = np.clip(np.dot(
+            np.array([px, py], dtype=np.float64) - a, ab) / (seg_len * seg_len), 0.0, 1.0)
         proj = a + t * ab
         d = np.linalg.norm(np.array([px, py]) - proj)
         if d < best_dist:
@@ -47,9 +48,10 @@ def sample_path_by_arc(path, arc_start, arc_end, spacing=2.0):
             cumulative += seg_len
             continue
 
-        # Clip to the requested range
-        t0 = max(0.0, (arc_start - seg_start) / seg_len) if seg_len > 1e-6 else 0.0
-        t1 = min(1.0, (arc_end - seg_start) / seg_len) if seg_len > 1e-6 else 1.0
+        t0 = max(0.0, (arc_start - seg_start) /
+                 seg_len) if seg_len > 1e-6 else 0.0
+        t1 = min(1.0, (arc_end - seg_start) /
+                 seg_len) if seg_len > 1e-6 else 1.0
 
         local_start = t0 * seg_len
         local_end = t1 * seg_len
@@ -78,9 +80,17 @@ def chaikin_smooth(pts, iterations=3):
     return pts
 
 
+def _build_arc_index(smooth_pts):
+    """Build a cumulative arc-length array for the precomputed smooth path."""
+    diffs = np.diff(smooth_pts, axis=0)
+    seg_lens = np.linalg.norm(diffs, axis=1)
+    arc_index = np.concatenate([[0.0], np.cumsum(seg_lens)])
+    return arc_index
+
+
 class PathRenderer:
-    def __init__(self, path_polyline,detector, grid_size=44, road_color=(255, 255, 255),
-                 forward_px=200, backward_px=80, ):
+    def __init__(self, path_polyline, detector, grid_size=44, road_color=(255, 255, 255),
+                 forward_px=200, backward_px=80):
         self.path_polyline = np.array(path_polyline, dtype=np.float64)
         self.grid_size = grid_size
         self.track_thickness = int(grid_size * 0.70)
@@ -88,24 +98,44 @@ class PathRenderer:
         self.forward_px = forward_px
         self.backward_px = backward_px
         self.target_id = 0
+
         # Precompute total arc length
         diffs = np.diff(self.path_polyline, axis=0)
         self.total_arc = np.sum(np.linalg.norm(diffs, axis=1))
 
+        # --- Precompute smoothed path ---
+        dense_pts = sample_path_by_arc(
+            self.path_polyline, 0.0, self.total_arc, spacing=2.0)
+        self.smooth_pts = chaikin_smooth(dense_pts, iterations=3)
+        self.smooth_arc_index = _build_arc_index(self.smooth_pts)
+        self.smooth_pts_int = np.int32(np.round(self.smooth_pts))
+        # --------------------------------
+
         # ArUco detection
         self.detector = detector
-        # State for surviving brief detection drops
         self.last_corners = None
         self.frames_lost = 0
 
-    def generate_cnn_frame(self, frame, draw_lookahead=True):
-        """Track the car, render nearby path segments and a fixed-size car polygon.
-        Returns (augmented_frame, corners) where corners is None if the car is lost."""
+    def _slice_smooth_path(self, arc_start, arc_end):
+        """Return the precomputed smooth points between two arc-length values."""
+        idx_start = np.searchsorted(
+            self.smooth_arc_index, arc_start, side='left')
+        idx_end = np.searchsorted(self.smooth_arc_index, arc_end, side='right')
+        idx_start = max(0, idx_start - 1)
+        idx_end = min(len(self.smooth_pts_int), idx_end + 1)
+        return self.smooth_pts_int[idx_start:idx_end]
+
+    def generate_cnn_frame(self, frame, predetected=None, draw_lookahead=True):
         output = frame.copy()
-        gray = cv2.cvtColor(output, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = self.detector.detectMarkers(gray)
+
+        if predetected is not None:
+            corners, ids = predetected
+            ids = ids if (ids is not None and len(ids) > 0) else None
+        else:
+            gray = cv2.cvtColor(output, cv2.COLOR_BGR2GRAY)
+            corners, ids = self.detector.detectMarkers(gray)[:2]
+
         c = None
-            
         if ids is None:
             self.frames_lost += 1
             if self.last_corners is None or self.frames_lost > 5:
@@ -120,26 +150,24 @@ class PathRenderer:
                     self.last_corners = c
                     self.frames_lost = 0
                     matched = True
-                    break  # stop once found
-
+                    break
             if not matched:
                 self.frames_lost += 1
                 if self.last_corners is None or self.frames_lost > 5:
                     return output, None
-                c = self.last_corners  # fall back to last known position
+                c = self.last_corners
 
         cx = int(np.mean(c[:, 0]))
         cy = int(np.mean(c[:, 1]))
 
-        # Draw path segment sliding smoothly with the car
+        # Use precomputed smooth path — just slice, no resampling or smoothing
         car_arc, dist, _ = project_onto_path(cx, cy, self.path_polyline)
         if dist < self.grid_size:
             arc_start = max(0.0, car_arc - self.backward_px)
             arc_end = min(self.total_arc, car_arc + self.forward_px)
-            pts = sample_path_by_arc(self.path_polyline, arc_start, arc_end)
-            if len(pts) >= 2:
-                smooth_pts = np.int32(np.round(chaikin_smooth(pts)))
-                cv2.polylines(output, [smooth_pts], False, self.road_color,
+            slice_pts = self._slice_smooth_path(arc_start, arc_end)
+            if len(slice_pts) >= 2:
+                cv2.polylines(output, [slice_pts], False, self.road_color,
                               self.track_thickness, cv2.LINE_AA)
 
         # Heading from ArUco top edge
@@ -166,7 +194,6 @@ class PathRenderer:
         return output, c
 
     def draw_debug(self, frame):
-        """Draw waypoint markers with indices and car coordinates."""
         for i, (wx, wy) in enumerate(self.path_polyline):
             cv2.circle(frame, (int(wx), int(wy)), 4, (255, 0, 255), -1)
             cv2.putText(frame, f"{i}:({int(wx)},{int(wy)})", (int(wx)+5, int(wy)-5),
