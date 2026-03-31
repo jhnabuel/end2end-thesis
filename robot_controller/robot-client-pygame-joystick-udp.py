@@ -77,7 +77,7 @@ def control_thread():
 
 
 def disk_writer_thread():
-    catalog_file = "catalog_0.catalog"
+    catalog_file = "../data/catalog_0.catalog"
     with open(catalog_file, 'a') as f:
         while not stop_event.is_set() or not record_queue.empty():
             try:
@@ -148,7 +148,7 @@ def main():
             multiplier = 1.0 if is_turbo else 0.5
             speed = int(raw_speed * 100 *
                         multiplier) if abs(raw_speed) > DEADZONE else 0
-            steering = int(raw_steer * 50) if abs(raw_steer) > DEADZONE else 0
+            steering = int(raw_steer * 100) if abs(raw_steer) > DEADZONE else 0
             if is_stop:
                 speed, steering = 0, 0
 
@@ -167,7 +167,7 @@ def main():
 
             if is_recording and frame is not None:
                 current_date_str = datetime.now().strftime("%Y-%m-%d")
-                image_filename = f"{current_date_str}_{record_index}.jpg"
+                image_filename = f"../data/images/{current_date_str}_{int(time.time() * 1000)}.jpg"
                 robot_data = {
                     'index': record_index,
                     'session_id': current_date_str,

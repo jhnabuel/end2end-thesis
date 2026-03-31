@@ -54,7 +54,7 @@ while True:
         multiplier = 1.0 if is_turbo else 0.5
         speed = int(raw_speed * 100 * multiplier) if abs(raw_speed) > DEADZONE else 0
         steering = int(raw_steer * 50) if abs(raw_steer) > DEADZONE else 0
-        
+
         if is_stop: speed, steering = 0, 0
 
         # --- Visual Elements ---

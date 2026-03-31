@@ -89,7 +89,7 @@ def _build_arc_index(smooth_pts):
 
 
 class PathRenderer:
-    def __init__(self, path_polyline, detector, grid_size=44, road_color=(255, 255, 255),
+    def __init__(self, path_polyline, detector, grid_size=44, road_color=(255, 0, 0),
                  forward_px=200, backward_px=80):
         self.path_polyline = np.array(path_polyline, dtype=np.float64)
         self.grid_size = grid_size
@@ -159,7 +159,9 @@ class PathRenderer:
 
         cx = int(np.mean(c[:, 0]))
         cy = int(np.mean(c[:, 1]))
-
+        cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128,128,128),
+                            self.track_thickness, cv2.LINE_AA)
+        cv2.addWeighted(frame, 0.9, output, 0.6, 0, output)
         # Use precomputed smooth path — just slice, no resampling or smoothing
         car_arc, dist, _ = project_onto_path(cx, cy, self.path_polyline)
         if dist < self.grid_size:
@@ -194,11 +196,12 @@ class PathRenderer:
         return output, c
 
     def draw_debug(self, frame):
-        for i, (wx, wy) in enumerate(self.path_polyline):
-            cv2.circle(frame, (int(wx), int(wy)), 4, (255, 0, 255), -1)
-            cv2.putText(frame, f"{i}:({int(wx)},{int(wy)})", (int(wx)+5, int(wy)-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 0, 255), 1, cv2.LINE_AA)
-
+        # for i, (wx, wy) in enumerate(self.path_polyline):
+        #     # cv2.circle(frame, (int(wx), int(wy)), 4, (255, 0, 255), -1)
+        #     # cv2.putText(frame, f"{i}:({int(wx)},{int(wy)})", (int(wx)+5, int(wy)-5),
+        #     #             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 0, 255), 1, cv2.LINE_AA)
+        # cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128,128,128),
+        #                     self.track_thickness, cv2.LINE_AA)
         if self.last_corners is not None:
             c = self.last_corners
             cx = int(np.mean(c[:, 0]))

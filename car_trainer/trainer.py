@@ -6,8 +6,8 @@ from dataset import SelfDrivingDataset
 from torch.utils.data import DataLoader
 
 def train_model():
-    CATALOG_FILE = "../data/catalog_2026-03-24.catalog"
-    IMAGE_DIR = "../data/"
+    CATALOG_FILE = "../data/catalog_0.catalog"
+    IMAGE_DIR = ""
     dataset = SelfDrivingDataset(CATALOG_FILE, IMAGE_DIR)
     dataloader = DataLoader(dataset=dataset, batch_size=64, shuffle=True, num_workers=4)
 
