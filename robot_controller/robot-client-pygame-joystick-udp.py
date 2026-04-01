@@ -1,3 +1,4 @@
+import os
 import cv2
 import socket
 import pygame
@@ -30,7 +31,7 @@ shared_state = {
 frame_queue = Queue(maxsize=2)
 record_queue = Queue(maxsize=10)
 stop_event = threading.Event()
-
+delete_event = threading.Event()
 
 def camera_thread():
     camera_generator = main_path_renderer()
@@ -78,8 +79,46 @@ def control_thread():
 
 def disk_writer_thread():
     catalog_file = "../data/catalog_0.catalog"
+    FRAMES_TO_DELETE = 60
     with open(catalog_file, 'a') as f:
         while not stop_event.is_set() or not record_queue.empty():
+            if delete_event.is_set():
+                delete_event.clear()
+
+                while not record_queue.empty():
+                    try:
+                        record_queue.get_nowait()
+                    except Empty:
+                        break
+                f.close()
+                try:
+                    if os.path.exists(catalog_file):
+                        with open(catalog_file, 'r') as read_f:
+                            lines = read_f.readline()
+                        
+                        if lines:
+                            num_to_delete = min(FRAMES_TO_DELETE, len(lines))
+                            lines_to_keep = lines[:-num_to_delete]
+                            lines_to_delete = lines[-num_to_delete:]
+
+                            for line in lines_to_delete:
+                                try:
+                                    data = json.loads(line)
+                                    img_path = data.get('cam/image_array')
+                                    if img_path and os.path.exists(img_path):
+                                        os.remove(img_path)
+                                except Exception as e:
+                                    print(f"Error deleting images: {e}")
+                            
+                            with open(catalog_file, 'w') as write_f:
+                                write_f.writelines(lines_to_keep)
+                            print(f"Success: Deleted last {num_to_delete} records.")
+
+                except Exception as e:
+                    print(f"Error during deletion process: {e}")
+
+                f = open(catalog_file, 'a')
+
             try:
                 item = record_queue.get(timeout=0.1)
             except Empty:
@@ -117,6 +156,9 @@ def main():
 
     next_frame_time = time.time()
 
+    delete_message_timer = 0
+    
+
     try:
         while not stop_event.is_set():
             # --- Rate limiter ---
@@ -139,6 +181,7 @@ def main():
                         with state_lock:
                             print(
                                 "Recording Started." if shared_state['is_recording'] else "Recording Stopped.")
+                        
 
             raw_speed = -joystick.get_axis(1)
             raw_steer = joystick.get_axis(3)
