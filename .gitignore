@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Training artifacts – generated per-run, not committed
+car_trainer/checkpoints_*/
+car_trainer/training_log_*.csv
+car_trainer/training_report_*.json
+
+# Model weights (large binary – manage separately if needed)
+# Uncomment the line below to also ignore .pth files
+# *.pth
+# *.pt
+
+# Raw training data (images + catalogs can be large)
+data/
+*.catalog
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
