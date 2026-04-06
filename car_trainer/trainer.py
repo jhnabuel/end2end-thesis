@@ -1,5 +1,5 @@
 """
-trainer.py  –  DAVE2 end-to-end training for autonomous robot steering.
+trainer.py   DAVE2 end-to-end training for autonomous robot steering.
 
 Logs captured during training
 ──────────────────────────────
@@ -13,10 +13,10 @@ Logs captured during training
     • learning rate (supports schedulers)
 
   After training (JSON summary):
-    • run metadata  – timestamp, hardware, Python/PyTorch versions
-    • dataset info  – catalog path, total samples, train/val split, batch size
-    • model info    – architecture name, total parameters, trainable parameters
-    • hyperparameters – epochs, lr, optimiser, loss function, scheduler
+    • run metadata  timestamp, hardware, Python/PyTorch versions
+    • dataset info  catalog path, total samples, train/val split, batch size
+    • model info    architecture name, total parameters, trainable parameters
+    • hyperparameters epochs, lr, optimiser, loss function, scheduler
     • per-epoch history  (list of dicts, same columns as CSV)
     • best epoch & metrics
     • training duration (wall-clock, hh:mm:ss)
@@ -24,13 +24,13 @@ Logs captured during training
 
 Output files (written next to trainer.py)
 ──────────────────────────────────────────
-  dave2_robot_model.pth                   – best-val-loss model weights (weights only)
+  dave2_robot_model.pth                   best-val-loss model weights (weights only)
   checkpoints_<timestamp>/
-    ckpt_epoch_<N>.pt                     – full checkpoint every `checkpoint_every` epochs
+    ckpt_epoch_<N>.pt                     full checkpoint every `checkpoint_every` epochs
                                             (model + optimizer + scheduler + metadata)
-    ckpt_best.pt                          – always the best-val checkpoint (full state)
-  training_log_<timestamp>.csv            – epoch-by-epoch table
-  training_report_<timestamp>.json        – full thesis summary
+    ckpt_best.pt                          always the best-val checkpoint (full state)
+  training_log_<timestamp>.csv            epoch-by-epoch table
+  training_report_<timestamp>.json        full thesis summary
 """
 
 import json
@@ -47,7 +47,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 
 # ---------------------------------------------------------------------------
-# Path fix – importable from any working directory
+# Path fix importable from any working directory
 # ---------------------------------------------------------------------------
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
