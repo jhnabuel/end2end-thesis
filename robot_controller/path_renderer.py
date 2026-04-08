@@ -1,3 +1,4 @@
+#path_renderer.py
 import cv2
 import numpy as np
 import cv2.aruco as aruco
@@ -99,7 +100,7 @@ class PathRenderer:
         self.backward_px = backward_px
         self.target_id = 0
 
-        # Precompute total arc length
+        # Precompute total arc length (on the original non-wrapped path)
         diffs = np.diff(self.path_polyline, axis=0)
         self.total_arc = np.sum(np.linalg.norm(diffs, axis=1))
 
@@ -109,6 +110,14 @@ class PathRenderer:
         self.smooth_pts = chaikin_smooth(dense_pts, iterations=3)
         self.smooth_arc_index = _build_arc_index(self.smooth_pts)
         self.smooth_pts_int = np.int32(np.round(self.smooth_pts))
+
+        # --- Build a WRAPPED version of the smooth path for lookahead ---
+        # Append one extra copy so arc math can continue past the seam.
+        # We only need forward_px worth of wrap, but one full copy is safe.
+        self.smooth_pts_wrapped = np.concatenate(
+            [self.smooth_pts, self.smooth_pts], axis=0)
+        self.smooth_arc_wrapped = _build_arc_index(self.smooth_pts_wrapped)
+        self.smooth_pts_wrapped_int = np.int32(np.round(self.smooth_pts_wrapped))
         # --------------------------------
 
         # ArUco detection
@@ -117,13 +126,40 @@ class PathRenderer:
         self.frames_lost = 0
 
     def _slice_smooth_path(self, arc_start, arc_end):
-        """Return the precomputed smooth points between two arc-length values."""
-        idx_start = np.searchsorted(
-            self.smooth_arc_index, arc_start, side='left')
-        idx_end = np.searchsorted(self.smooth_arc_index, arc_end, side='right')
-        idx_start = max(0, idx_start - 1)
-        idx_end = min(len(self.smooth_pts_int), idx_end + 1)
-        return self.smooth_pts_int[idx_start:idx_end]
+        """
+        Return smooth points between arc_start and arc_end, wrapping around
+        the loop seam if arc_end > total_arc.
+        """
+        if arc_end <= self.total_arc:
+            # Normal case: no wrap needed, use the plain index
+            idx_start = np.searchsorted(
+                self.smooth_arc_index, arc_start, side='left')
+            idx_end = np.searchsorted(
+                self.smooth_arc_index, arc_end, side='right')
+            idx_start = max(0, idx_start - 1)
+            idx_end = min(len(self.smooth_pts_int), idx_end + 1)
+            return self.smooth_pts_int[idx_start:idx_end]
+        else:
+            # Wrap case: slice from arc_start to end-of-loop, then 0 to remainder
+            remainder = arc_end - self.total_arc
+
+            # Part 1: arc_start → total_arc
+            idx_start = np.searchsorted(
+                self.smooth_arc_index, arc_start, side='left')
+            idx_start = max(0, idx_start - 1)
+            part1 = self.smooth_pts_int[idx_start:]
+
+            # Part 2: 0 → remainder (beginning of the loop)
+            idx_end = np.searchsorted(
+                self.smooth_arc_index, remainder, side='right')
+            idx_end = min(len(self.smooth_pts_int), idx_end + 1)
+            part2 = self.smooth_pts_int[:idx_end]
+
+            if len(part1) == 0:
+                return part2
+            if len(part2) == 0:
+                return part1
+            return np.concatenate([part1, part2], axis=0)
 
     def generate_cnn_frame(self, frame, predetected=None, draw_lookahead=True):
         output = frame.copy()
@@ -159,14 +195,15 @@ class PathRenderer:
 
         cx = int(np.mean(c[:, 0]))
         cy = int(np.mean(c[:, 1]))
-        cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128,128,128),
-                            self.track_thickness, cv2.LINE_AA)
+        cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128, 128, 128),
+                      self.track_thickness, cv2.LINE_AA)
         cv2.addWeighted(frame, 0.9, output, 0.6, 0, output)
-        # Use precomputed smooth path — just slice, no resampling or smoothing
+
         car_arc, dist, _ = project_onto_path(cx, cy, self.path_polyline)
         if dist < self.grid_size:
             arc_start = max(0.0, car_arc - self.backward_px)
-            arc_end = min(self.total_arc, car_arc + self.forward_px)
+            # arc_end is now allowed to exceed total_arc — _slice_smooth_path handles the wrap
+            arc_end = car_arc + self.forward_px
             slice_pts = self._slice_smooth_path(arc_start, arc_end)
             if len(slice_pts) >= 2:
                 cv2.polylines(output, [slice_pts], False, self.road_color,
@@ -196,12 +233,6 @@ class PathRenderer:
         return output, c
 
     def draw_debug(self, frame):
-        # for i, (wx, wy) in enumerate(self.path_polyline):
-        #     # cv2.circle(frame, (int(wx), int(wy)), 4, (255, 0, 255), -1)
-        #     # cv2.putText(frame, f"{i}:({int(wx)},{int(wy)})", (int(wx)+5, int(wy)-5),
-        #     #             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 0, 255), 1, cv2.LINE_AA)
-        # cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128,128,128),
-        #                     self.track_thickness, cv2.LINE_AA)
         if self.last_corners is not None:
             c = self.last_corners
             cx = int(np.mean(c[:, 0]))

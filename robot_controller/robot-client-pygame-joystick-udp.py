@@ -187,11 +187,6 @@ def disk_writer_thread():
                 f.flush()
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
 def main():
     current_paddle = 0
     pygame.init()
@@ -226,9 +221,16 @@ def main():
     delete_flash_until = 0.0
     delete_flash_msg   = ""
 
+    # Safe defaults so display never crashes before first loop tick
+    speed    = 0
+    steering = 0
+    is_ai_mode   = False
+    is_recording = False
+    is_stop      = False
+
     threads = [
-        threading.Thread(target=camera_thread,    daemon=True),
-        threading.Thread(target=control_thread,   daemon=True),
+        threading.Thread(target=camera_thread,      daemon=True),
+        threading.Thread(target=control_thread,     daemon=True),
         threading.Thread(target=disk_writer_thread, daemon=True),
     ]
     for t in threads:
@@ -239,13 +241,12 @@ def main():
     try:
         while not stop_event.is_set():
             # --- Rate limiter ---
-            now        = time.time()
-            sleep_for  = next_frame_time - now
+            now       = time.time()
+            sleep_for = next_frame_time - now
             if sleep_for > 0:
                 time.sleep(sleep_for)
             next_frame_time = max(next_frame_time + FRAME_INTERVAL, time.time())
 
-            # --- Events / Button handling ---
             pygame.event.pump()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -274,7 +275,7 @@ def main():
                         delete_flash_msg   = f"Deleted {n} frames!"
                         delete_flash_until = time.time() + 2.0
 
-                    # Button 0→ toggle AI mode
+                    # Button 0 → toggle AI mode
                     elif event.button == 0:
                         if not ai_available:
                             print("[AI] Model not loaded — AI mode unavailable.")
@@ -284,62 +285,44 @@ def main():
                                 mode = shared_state['is_ai_mode']
                             print(f"[AI] AI mode {'ENABLED' if mode else 'DISABLED'}.")
 
-                # --- Read joystick axes & buttons ---
-                paddle_speed = {
-                    0 : 0,
-                    1 : 0.45,
-                    2 : 0.65,
-                    3 : 0.85
-                }
-                
-                def get_speed():
-                    return paddle_speed[current_paddle]
-                #raw_speed = -joystick.get_axis(1)   # left stick Y
-                raw_steer =  joystick.get_axis(3)   # right stick X
-                # is_turbo  =  joystick.get_button(5) # RB / R1
-                is_stop   =  joystick.get_button(1) # B / Circle
+                    # Button 4 → gear down
+                    elif event.button == 4:
+                        current_paddle = max(current_paddle - 1, 0)
+                        print(f"[GEAR] Paddle: {current_paddle}")
 
-                with state_lock:
-                    is_ai_mode   = shared_state['is_ai_mode']
-                    is_recording = shared_state['is_recording']
+                    # Button 5 → gear up
+                    elif event.button == 5:
+                        current_paddle = min(current_paddle + 1, 3)
+                        print(f"[GEAR] Paddle: {current_paddle}")
 
-                # --- Grab latest camera frame ---
-                try:
-                    frame = frame_queue.get_nowait()
-                except Empty:
-                    frame = None
+            paddle_speed = {0: 0, 1: 0.45, 2: 0.65, 3: 0.85}
 
-                # --- Compute speed & steering ---
-                if is_ai_mode and engine is not None and frame is not None:
-                    # AI autopilot: model predicts steering, fixed throttle
-                    ai_steering, ai_throttle = engine.predict_frame(frame)
-                    speed    = 0 if is_stop else ai_throttle
-                    steering = 0 if is_stop else ai_steering
-                else:
-                    # # Manual control
-                    # multiplier = 1.0 if is_turbo else 0.5
-                    # speed    = int(raw_speed * 100 * multiplier) if abs(raw_speed) > DEADZONE else 0
-                    # steering = int(raw_steer * 50)              if abs(raw_steer) > DEADZONE else 0
-                    #paddle style
+            raw_steer = joystick.get_axis(3)   # right stick X
+            is_stop   = joystick.get_button(1) # B / Circle
 
-                    if event.type == pygame.JOYBUTTONDOWN:
-                        if event.button == 4:
-                            current_paddle =  max(current_paddle - 1, 0)
-                        
-                        if event.button == 5:
-                            current_paddle = min(current_paddle + 1, 3)
-                        
-                    multiplier = 0.5
-                    raw_speed = get_speed()
-                    speed    = int(raw_speed * 100 * multiplier) if abs(raw_speed) > DEADZONE else 0
-                    steering = int(raw_steer * 50)              if abs(raw_steer) > DEADZONE else 0
-                    if is_stop:
-                        speed, steering = 0, 0
+            with state_lock:
+                is_ai_mode   = shared_state['is_ai_mode']
+                is_recording = shared_state['is_recording']
+
+            try:
+                frame = frame_queue.get_nowait()
+            except Empty:
+                frame = None
+
+            if is_ai_mode and engine is not None and frame is not None:
+                ai_steering, ai_throttle = engine.predict_frame(frame)
+                speed    = 0 if is_stop else ai_throttle
+                steering = 0 if is_stop else ai_steering
+            else:
+                raw_speed = paddle_speed[current_paddle]
+                speed    = int(raw_speed * 100 * 0.5) if raw_speed > DEADZONE else 0
+                steering = int(raw_steer * 50)         if abs(raw_steer) > DEADZONE else 0
+                if is_stop:
+                    speed, steering = 0, 0
 
             with state_lock:
                 shared_state['speed']    = speed
                 shared_state['steering'] = steering
-                # shared_state['is_turbo'] = is_turbo
                 shared_state['is_stop']  = is_stop
 
             # --- Recording ---
@@ -360,10 +343,11 @@ def main():
                     record_queue.put((image_filename, frame, robot_data))
                 record_index_ref[0] += 1
 
-            # --- Display ---
+            # ----------------------------------------------------------------
+            # Display
+            # ----------------------------------------------------------------
             screen.fill(BLACK)
 
-            # AI mode banner
             if is_ai_mode:
                 pygame.draw.rect(screen, PURPLE, (0, 0, 420, 32))
                 draw_text("  \u2605 AI AUTOPILOT MODE \u2605", 10, 5, WHITE)
@@ -375,22 +359,18 @@ def main():
             draw_text(f"Recording: {'ON' if is_recording else 'OFF'}", 20, y + 78,
                       GREEN if is_recording else WHITE)
             draw_text(f"Gear: {current_paddle}", 20, y + 98)
-            # turbo_color = GREEN if is_turbo else (50, 50, 50)
-            stop_color  = RED   if is_stop  else (50, 50, 50)
-            # pygame.draw.rect(screen, turbo_color, (20, y + 112, 100, 36))
-            # draw_text("Turbo", 35,  y + 120, BLACK if is_turbo else WHITE)
-            pygame.draw.rect(screen, stop_color,  (140, y + 112, 100, 36))
-            draw_text("Stop",  160, y + 120, BLACK if is_stop  else WHITE)
+
+            stop_color = RED if is_stop else (50, 50, 50)
+            pygame.draw.rect(screen, stop_color, (140, y + 112, 100, 36))
+            draw_text("Stop", 160, y + 120, BLACK if is_stop else WHITE)
 
             bar_height = int(abs(speed) * 2)
             bar_y      = 190 - bar_height if speed >= 0 else 190
             pygame.draw.rect(screen, WHITE,  (370, 50, 30, 200), 2)
             pygame.draw.rect(screen, PURPLE if is_ai_mode else BLUE, (372, bar_y, 26, bar_height))
 
-            # Button legend
-            draw_text("Btn2=Rec  Btn3=Del60  Btn4=AI", 10, 306, (120, 120, 120), small=True)
+            draw_text("Btn2=Rec  Btn3=Del60  Btn0=AI", 10, 306, (120, 120, 120), small=True)
 
-            # Delete flash
             if time.time() < delete_flash_until:
                 draw_text(delete_flash_msg, 20, 282, RED)
 
