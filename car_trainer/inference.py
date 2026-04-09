@@ -34,7 +34,7 @@ from model import DAVE2  # noqa: E402
 DEFAULT_WEIGHTS = os.path.join(_THIS_DIR, "dave2_robot_model.pth")
 IMG_H, IMG_W = 66, 200          # DAVE-2 input size (height, width)
 STEERING_SCALE = 50.0           # inverse of dataset normalisation (angle / 50)
-DEFAULT_THROTTLE = 40           # constant throttle used in AI mode (0-100)
+DEFAULT_THROTTLE = 28           # constant throttle used in AI mode (0-100)
 
 
 # ---------------------------------------------------------------------------
