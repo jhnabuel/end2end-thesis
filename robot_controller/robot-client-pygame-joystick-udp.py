@@ -131,15 +131,16 @@ def delete_last_n_frames(n, record_index_ref):
 def camera_thread():
     camera_generator = main_path_renderer()
     while not stop_event.is_set():
-        frame = next(camera_generator, None)
-        if frame is None:
+        result = next(camera_generator, None)
+        if result is None:
             break
+        frame, save_frame = result
         if frame_queue.full():
             try:
                 frame_queue.get_nowait()
             except Empty:
                 pass
-        frame_queue.put(frame)
+        frame_queue.put((frame, save_frame))
     stop_event.set()
 
 
@@ -180,6 +181,8 @@ def disk_writer_thread():
             continue
 
         filename, frame, robot_data = item
+        if frame is None:
+            continue
         cv2.imwrite(filename, frame)
         with catalog_lock:
             with open(CATALOG_FILE, 'a') as f:
@@ -305,9 +308,9 @@ def main():
                 is_recording = shared_state['is_recording']
 
             try:
-                frame = frame_queue.get_nowait()
+                frame, save_frame = frame_queue.get_nowait()
             except Empty:
-                frame = None
+                frame, save_frame = None, None
 
             if is_ai_mode and engine is not None and frame is not None:
                 ai_steering, ai_throttle = engine.predict_frame(frame)
@@ -326,7 +329,7 @@ def main():
                 shared_state['is_stop']  = is_stop
 
             # --- Recording ---
-            if is_recording and frame is not None:
+            if is_recording and frame is not None and save_frame is not None:
                 current_date_str = datetime.now().strftime("%Y-%m-%d")
                 idx              = record_index_ref[0]
                 image_filename   = os.path.join(IMAGE_DIR, f"{current_date_str}_{idx}.jpg")
@@ -340,7 +343,7 @@ def main():
                     'throttle':        speed,
                 }
                 if not record_queue.full():
-                    record_queue.put((image_filename, frame, robot_data))
+                    record_queue.put((image_filename, save_frame, robot_data))
                 record_index_ref[0] += 1
 
             # ----------------------------------------------------------------

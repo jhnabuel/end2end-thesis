@@ -8,6 +8,7 @@ import pickle
 
 ARENA_IDS = {24, 42, 66, 70}
 CAR_ID = 0
+SAVE_AS_BLACK_CANVAS = True
 
 def pixel_to_cell(x, y, grid_size):
     return (x // grid_size, y // grid_size)
@@ -85,12 +86,19 @@ def main_path_renderer():
 
         car_ids_arr = np.array(car_ids_list) if car_ids_list else None
 
-        out, _ = renderer.generate_cnn_frame(warped, predetected=(car_corners_filtered, car_ids_arr))
+        out, detected_corners = renderer.generate_cnn_frame(warped, predetected=(car_corners_filtered, car_ids_arr))
+        if SAVE_AS_BLACK_CANVAS:
+
+            black_canvas = np.zeros_like(warped)
+            save_frame, _ = renderer.generate_cnn_frame(black_canvas, predetected = (car_corners_filtered, car_ids_arr), black_bg =  True)
+        else:
+            save_frame = warped.copy()
+
         renderer.draw_debug(out)
         cv2.imshow("Path View", out)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        yield out
+        yield out, save_frame
 
     cap.release()
     cv2.destroyAllWindows()

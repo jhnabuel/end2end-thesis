@@ -161,8 +161,8 @@ class PathRenderer:
                 return part1
             return np.concatenate([part1, part2], axis=0)
 
-    def generate_cnn_frame(self, frame, predetected=None, draw_lookahead=True):
-        output = frame.copy()
+    def generate_cnn_frame(self, frame, predetected=None, draw_lookahead=True, black_bg = False, ):
+        output = np.zeros_like(frame) if black_bg else frame.copy()
 
         if predetected is not None:
             corners, ids = predetected
@@ -195,9 +195,13 @@ class PathRenderer:
 
         cx = int(np.mean(c[:, 0]))
         cy = int(np.mean(c[:, 1]))
-        cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128, 128, 128),
-                      self.track_thickness, cv2.LINE_AA)
-        cv2.addWeighted(frame, 0.9, output, 0.6, 0, output)
+        if not black_bg:    
+            cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128, 128, 128),
+                        self.track_thickness, cv2.LINE_AA)
+            cv2.addWeighted(frame, 0.9, output, 0.6, 0, output)
+        else:
+            cv2.polylines(output, [np.int32(self.path_polyline)], False, (80, 80, 80),
+                  self.track_thickness, cv2.LINE_AA)
 
         car_arc, dist, _ = project_onto_path(cx, cy, self.path_polyline)
         if dist < self.grid_size:
@@ -205,8 +209,9 @@ class PathRenderer:
             # arc_end is now allowed to exceed total_arc — _slice_smooth_path handles the wrap
             arc_end = car_arc + self.forward_px
             slice_pts = self._slice_smooth_path(arc_start, arc_end)
+            road_color = (255, 255, 255) if black_bg else self.road_color
             if len(slice_pts) >= 2:
-                cv2.polylines(output, [slice_pts], False, self.road_color,
+                cv2.polylines(output, [slice_pts], False, road_color,
                               self.track_thickness, cv2.LINE_AA)
 
         # Heading from ArUco top edge
@@ -216,7 +221,7 @@ class PathRenderer:
         cos_a, sin_a = math.cos(angle), math.sin(angle)
 
         # Draw fixed-size car polygon
-        hw = 15
+        hw = 15 
         car_pts = np.int32([[
             (cx + hw*cos_a - hw*sin_a, cy + hw*sin_a + hw*cos_a),
             (cx + hw*cos_a + hw*sin_a, cy + hw*sin_a - hw*cos_a),
