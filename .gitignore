@@ -24,7 +24,8 @@ car_trainer/training_report_*.json
 # *.pt
 
 # Raw training data (images + catalogs can be large)
-data/
+data/*
+data_v1/
 *.catalog
 
 # OS

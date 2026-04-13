@@ -151,9 +151,8 @@ def train_model(
     optimizer = optim.Adam(model.parameters(), lr=lr)
     # ReduceLROnPlateau: halve LR if val loss stagnates for 3 epochs
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3, verbose=True
+        optimizer, mode='min', factor=0.5, patience=3
     )
-
     # ------------------------------------------------------------------
     # CSV initialisation
     # ------------------------------------------------------------------
