@@ -212,7 +212,7 @@ class PathRenderer:
             road_color = (255, 255, 255) if black_bg else self.road_color
             if len(slice_pts) >= 2:
                 cv2.polylines(output, [slice_pts], False, road_color,
-                              self.track_thickness, cv2.LINE_AA)
+                              self.track_thickness, cv2.LINE_8)
 
         # Heading from ArUco top edge
         front_x = (c[0][0] + c[1][0]) / 2.0

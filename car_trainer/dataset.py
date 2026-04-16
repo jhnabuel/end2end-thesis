@@ -34,22 +34,21 @@ class SelfDrivingDataset(Dataset):
         image_tensor = torch.from_numpy(img).float().permute(2, 0, 1)
 
         normalized_steering_angle = float(record['angle']) / 50.0
-        label_tensor = torch.tensor([normalized_steering_angle], dtype=torch.float32)
+        normalized_throttle = float(record['throttle']) / 100.0
+        label_tensor = torch.tensor([normalized_steering_angle, normalized_throttle], dtype=torch.float32)
 
         return image_tensor, label_tensor
 
 
 if __name__ == "__main__":
     base_image_dir = "../data"
-    catalog_path = "../data/catalog_2026-03-24.catalog"
+    catalog_path = "../data/catalog_0.catalog"
 
 
     dataset = SelfDrivingDataset(catalog_path=catalog_path, base_image_dir=base_image_dir)
 
     print("Datset size: ", len(dataset))
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-    for batch_images, batch_labels in dataloader:
-        print(f"Batch shape: {batch_images.shape}, Labels shape: {batch_labels.shape}")
     image, label = dataset[0]
 
     print("Image shape:", image.shape)   # should be [3, 66, 200]

@@ -71,10 +71,12 @@ def seconds_to_hms(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
 
-def compute_mae(outputs: torch.Tensor, labels: torch.Tensor) -> float:
-    """Mean Absolute Error on a batch (both in normalised steering space)."""
-    return torch.mean(torch.abs(outputs - labels)).item()
-
+def compute_mae(outputs, labels):
+    steering_out, throttle_out = outputs
+    steering_lbl, throttle_lbl = labels[:, 0:1], labels[:, 1:2]
+    mae_s = torch.mean(torch.abs(steering_out - steering_lbl)).item()
+    mae_t = torch.mean(torch.abs(throttle_out - throttle_lbl)).item()
+    return (mae_s + mae_t) / 2.0
 
 def evaluate(model, dataloader, criterion, device):
     """Run one pass over *dataloader* and return (avg_mse, avg_mae)."""
@@ -85,7 +87,9 @@ def evaluate(model, dataloader, criterion, device):
         for images, labels in dataloader:
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
-            total_loss += criterion(outputs, labels).item()
+            steering_out, throttle_out = outputs
+            steering_lbl, throttle_lbl = labels[:, 0:1], labels[:, 1:2]
+            total_loss += (criterion(steering_out, steering_lbl) + criterion(throttle_out, throttle_lbl)).item()
             total_mae += compute_mae(outputs, labels)
     n = len(dataloader)
     return total_loss / n, total_mae / n
@@ -188,11 +192,15 @@ def train_model(
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            steering_out, throttle_out = outputs
+            steering_lbl, throttle_lbl = labels[:, 0:1], labels[:, 1:2]
+            loss = criterion(steering_out, steering_lbl) + criterion(throttle_out, throttle_lbl)
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-            running_mae  += compute_mae(outputs.detach(), labels)
+            outputs_detached = (steering_out.detach(), throttle_out.detach())
+            running_mae += compute_mae(outputs_detached, labels)
+
 
         train_mse = running_loss / len(train_loader)
         train_mae = running_mae  / len(train_loader)

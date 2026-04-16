@@ -32,9 +32,10 @@ from model import DAVE2  # noqa: E402
 # Constants
 # ---------------------------------------------------------------------------
 DEFAULT_WEIGHTS = os.path.join(_THIS_DIR, "dave2_robot_model.pth")
-IMG_H, IMG_W = 66, 200          # DAVE-2 input size (height, width)
-STEERING_SCALE = 50.0           # inverse of dataset normalisation (angle / 50)
-DEFAULT_THROTTLE = 28           # constant throttle used in AI mode (0-100)
+IMG_H, IMG_W = 66, 200
+THROTTLE_SCALE = 100.0
+STEERING_SCALE = 50.0
+DEFAULT_THROTTLE = 28
 
 
 # ---------------------------------------------------------------------------
@@ -62,13 +63,12 @@ class InferenceEngine:
     def __init__(
         self,
         weights_path: str = DEFAULT_WEIGHTS,
-        throttle: int = DEFAULT_THROTTLE,
         device: str | None = None,
     ):
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
-        self.throttle = throttle
+
 
         self.model = DAVE2().to(self.device)
         state = torch.load(weights_path, map_location=self.device)
@@ -110,15 +110,18 @@ class InferenceEngine:
         """
         tensor = self._preprocess(bgr_frame)
         with torch.no_grad():
-            raw = self.model(tensor).item()         # tanh output in [-1, 1]
-        steering = int(round(raw * STEERING_SCALE))
-        return steering, self.throttle
+            raw_steering,raw_throttle = self.model(tensor)
+        steering = int(round(raw_steering * STEERING_SCALE))
+        throttle = int(round(raw_throttle * THROTTLE_SCALE))  
+        return steering, throttle
 
     def predict_frame_raw(self, bgr_frame: np.ndarray) -> float:
         """Return the raw tanh output in [-1, 1] without scaling."""
         tensor = self._preprocess(bgr_frame)
         with torch.no_grad():
-            return self.model(tensor).item()
+            raw_steering,raw_throttle = self.model(tensor)
+            print(f"Raw model outputs: steering={raw_steering}, throttle={raw_throttle}")
+            return raw_steering,raw_throttle
 
 
 # ---------------------------------------------------------------------------
@@ -192,11 +195,11 @@ def predict_steering_from_path(image_path: str, weights_path: str = DEFAULT_WEIG
     engine = InferenceEngine.__new__(InferenceEngine)
     engine.device = device
     engine.model = model
-    engine.throttle = DEFAULT_THROTTLE
-    raw = engine.predict_frame_raw(bgr)
-    steering = int(round(raw * STEERING_SCALE))
-    print(f"Predicted steering (raw={raw:.4f})  →  {steering}  [range ≈ -50 … +50]")
-    return raw
+    raw_steering, raw_throttle = engine.predict_frame_raw(bgr)
+    steering = int(raw_steering * STEERING_SCALE)
+    print(f"Predicted steering (raw={raw_steering.item():.4f})  →  {steering}  [range ≈ -50 … +50]")
+    print(f"Predicted throttle (raw={raw_throttle.item():.4f})  →  {int(raw_throttle * THROTTLE_SCALE)}  [range ≈ 0 … 100]")
+    return raw_steering, raw_throttle
 
 
 # ---------------------------------------------------------------------------
