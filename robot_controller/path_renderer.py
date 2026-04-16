@@ -216,9 +216,12 @@ class PathRenderer:
                               self.track_thickness // 2, cv2.LINE_AA)
 
         # Heading from ArUco top edge
-        front_x = (c[0][0] + c[1][0]) / 2.0
-        front_y = (c[0][1] + c[1][1]) / 2.0
-        angle = math.atan2(front_y - cy, front_x - cx)
+        top_mid_x    = (c[0][0] + c[1][0]) / 2.0
+        top_mid_y    = (c[0][1] + c[1][1]) / 2.0
+        bottom_mid_x = (c[2][0] + c[3][0]) / 2.0
+        bottom_mid_y = (c[2][1] + c[3][1]) / 2.0
+        # Forward = from bottom midpoint toward top midpoint
+        angle = math.atan2(top_mid_y - bottom_mid_y, top_mid_x - bottom_mid_x)
         cos_a, sin_a = math.cos(angle), math.sin(angle)
 
         # Draw fixed-size car polygon
