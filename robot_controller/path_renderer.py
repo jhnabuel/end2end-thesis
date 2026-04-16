@@ -91,7 +91,7 @@ def _build_arc_index(smooth_pts):
 
 class PathRenderer:
     def __init__(self, path_polyline, detector, grid_size=44, road_color=(255, 0, 0),
-                 forward_px=200, backward_px=80):
+                 forward_px=200, backward_px=50):
         self.path_polyline = np.array(path_polyline, dtype=np.float64)
         self.grid_size = grid_size
         self.track_thickness = int(grid_size * 1)
@@ -203,26 +203,55 @@ class PathRenderer:
             cv2.polylines(output, [np.int32(self.path_polyline)], False, (80, 80, 80),
                   self.track_thickness, cv2.LINE_8)
 
+        # Heading from ArUco top edge
+        top_mid_x    = (c[2][0] + c[3][0]) / 2.0
+        top_mid_y    = (c[2][1] + c[3][1]) / 2.0
+        bottom_mid_x = (c[0][0] + c[1][0]) / 2.0
+        bottom_mid_y = (c[0][1] + c[1][1]) / 2.0
+        angle = math.atan2(top_mid_y - bottom_mid_y, top_mid_x - bottom_mid_x)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
         
         car_arc, dist, _ = project_onto_path(cx, cy, self.path_polyline)
         if dist < self.grid_size:
-            arc_start = max(0.0, car_arc - self.backward_px)
-            # arc_end is now allowed to exceed total_arc — _slice_smooth_path handles the wrap
-            arc_end = car_arc + self.forward_px
-            slice_pts = self._slice_smooth_path(arc_start, arc_end)
+            # path tangent 
+            idx = np.searchsorted(self.smooth_arc_index, car_arc)
+            idx = np.clip(idx, 0, len(self.smooth_pts_int) - 6)
+            p1 = self.smooth_pts_int[idx]
+            p2 = self.smooth_pts_int[idx + 5]
+            path_dx = float(p2[0] - p1[0])
+            path_dy = float(p2[1] - p1[1])
+
+            # Dot product : if robot facing the same direction or not
+            dot = cos_a * path_dx + sin_a * path_dy
+            if dot >= 0:
+                # Clockwise — normal case
+                arc_start = max(0.0, car_arc - self.backward_px)
+                arc_end = car_arc + self.forward_px
+                slice_pts = self._slice_smooth_path(arc_start, arc_end)
+            else:
+                # Counter-clockwise — forward/backward are flipped
+                raw_start = car_arc - self.forward_px
+                raw_end = min(self.total_arc, car_arc + self.backward_px)
+
+                if raw_start >= 0:
+                    slice_pts = self._slice_smooth_path(raw_start, raw_end)
+                else:
+                    # raw_start is negative, wrap it to end of loop
+                    wrapped_start = self.total_arc + raw_start
+                    part1 = self._slice_smooth_path(wrapped_start, self.total_arc)
+                    part2 = self._slice_smooth_path(0.0, raw_end)
+                    if len(part1) > 0 and len(part2) > 0:
+                        slice_pts = np.concatenate([part1, part2], axis=0)
+                    elif len(part1) > 0:
+                        slice_pts = part1
+                    else:
+                        slice_pts = part2
+
             road_color = (255, 255, 255) if black_bg else self.road_color
             if len(slice_pts) >= 2:
                 cv2.polylines(output, [slice_pts], False, road_color,
                               self.track_thickness // 2, cv2.LINE_AA)
 
-        # Heading from ArUco top edge
-        top_mid_x    = (c[0][0] + c[1][0]) / 2.0
-        top_mid_y    = (c[0][1] + c[1][1]) / 2.0
-        bottom_mid_x = (c[2][0] + c[3][0]) / 2.0
-        bottom_mid_y = (c[2][1] + c[3][1]) / 2.0
-        # Forward = from bottom midpoint toward top midpoint
-        angle = math.atan2(top_mid_y - bottom_mid_y, top_mid_x - bottom_mid_x)
-        cos_a, sin_a = math.cos(angle), math.sin(angle)
 
         # Draw fixed-size car polygon
         hw = 15 
