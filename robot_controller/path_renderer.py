@@ -94,7 +94,7 @@ class PathRenderer:
                  forward_px=200, backward_px=80):
         self.path_polyline = np.array(path_polyline, dtype=np.float64)
         self.grid_size = grid_size
-        self.track_thickness = int(grid_size * 0.70)
+        self.track_thickness = int(grid_size * 1)
         self.road_color = road_color
         self.forward_px = forward_px
         self.backward_px = backward_px
@@ -197,12 +197,13 @@ class PathRenderer:
         cy = int(np.mean(c[:, 1]))
         if not black_bg:    
             cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128, 128, 128),
-                        self.track_thickness, cv2.LINE_AA)
+                        self.track_thickness, cv2.LINE_8)
             cv2.addWeighted(frame, 0.9, output, 0.6, 0, output)
         else:
             cv2.polylines(output, [np.int32(self.path_polyline)], False, (80, 80, 80),
-                  self.track_thickness, cv2.LINE_AA)
+                  self.track_thickness, cv2.LINE_8)
 
+        
         car_arc, dist, _ = project_onto_path(cx, cy, self.path_polyline)
         if dist < self.grid_size:
             arc_start = max(0.0, car_arc - self.backward_px)
@@ -212,7 +213,7 @@ class PathRenderer:
             road_color = (255, 255, 255) if black_bg else self.road_color
             if len(slice_pts) >= 2:
                 cv2.polylines(output, [slice_pts], False, road_color,
-                              self.track_thickness, cv2.LINE_AA)
+                              self.track_thickness // 2, cv2.LINE_AA)
 
         # Heading from ArUco top edge
         front_x = (c[0][0] + c[1][0]) / 2.0
@@ -235,6 +236,9 @@ class PathRenderer:
             ly = int(cy + sin_a * 35)
             cv2.line(output, (cx, cy), (lx, ly), (0, 255, 0), 4, cv2.LINE_AA)
 
+        cv2.polylines(output, [np.int32(self.path_polyline)], False, (0, 255, 255),
+              max(2, self.track_thickness // 30
+                  ), cv2.LINE_8)
         return output, c
 
     def draw_debug(self, frame):
