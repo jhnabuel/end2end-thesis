@@ -1,3 +1,4 @@
+#test_path.renderer.py
 import cv2.aruco as aruco
 from path_renderer import PathRenderer
 from path_utils import load_path_points
@@ -25,7 +26,7 @@ def load_path_polyline(grid_size):
     return [cell_center(*c, grid_size) for c in cells]
 
 def main_path_renderer():
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(2)
     if not cap.isOpened():
         print("ERROR: Cannot open camera")
         return
