@@ -234,7 +234,7 @@ class PathRenderer:
         if draw_lookahead:
             lx = int(cx + cos_a * 35)
             ly = int(cy + sin_a * 35)
-            cv2.line(output, (cx, cy), (lx, ly), (0, 255, 0), 4, cv2.LINE_AA)
+            cv2.line(output, (cx, cy), (lx, ly), (0, 255, 0), 4, cv2.LINE_8)
 
         cv2.polylines(output, [np.int32(self.path_polyline)], False, (0, 255, 255),
               max(2, self.track_thickness // 30
