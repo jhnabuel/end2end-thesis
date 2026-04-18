@@ -313,7 +313,7 @@ def main():
                 frame, save_frame = None, None
 
             if is_ai_mode and engine is not None and frame is not None:
-                ai_steering, ai_throttle = engine.predict_frame(frame)
+                ai_steering, ai_throttle = engine.predict_frame(save_frame if save_frame is not None else frame)
                 speed    = 0 if is_stop else ai_throttle
                 steering = 0 if is_stop else ai_steering
             else:
