@@ -111,8 +111,8 @@ class InferenceEngine:
         tensor = self._preprocess(bgr_frame)
         with torch.no_grad():
             raw_steering,raw_throttle = self.model(tensor)
-        steering = int(round(raw_steering * STEERING_SCALE))
-        throttle = int(round(raw_throttle * THROTTLE_SCALE))  
+        steering = int(raw_steering * STEERING_SCALE)
+        throttle = int(raw_throttle * THROTTLE_SCALE)  
         return steering, throttle
 
     def predict_frame_raw(self, bgr_frame: np.ndarray) -> float:

@@ -102,7 +102,7 @@ def evaluate(model, dataloader, criterion, device):
 def train_model(
     catalog_file: str = "../data/catalog_0.catalog",
     image_dir: str = "../data/",
-    epochs: int = 20,
+    epochs: int = 50,
     batch_size: int = 64,
     lr: float = 1e-4,
     val_split: float = 0.15,
