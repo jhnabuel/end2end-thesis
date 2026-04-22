@@ -1,5 +1,6 @@
 import sys
 import os
+import struct
 
 # Allow importing from car_trainer/ regardless of working directory
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,11 +26,17 @@ from inference import InferenceEngine
 ROBOT_IP          = '192.168.0.2'
 PORT              = 5000
 DEADZONE          = 0.1
-FRAME_INTERVAL    = 0.05
+CONTROL_HZ        = 30          # UDP send rate (independent of render rate)
+RENDER_HZ         = 20          # Main loop / display rate
+CONTROL_INTERVAL  = 1.0 / CONTROL_HZ
+FRAME_INTERVAL    = 1.0 / RENDER_HZ
 CATALOG_FILE      = "../data/catalog_0.catalog"
 IMAGE_DIR         = "../data/images"
 DELETE_COUNT      = 60
 WEIGHTS_PATH      = os.path.join(_CAR_TRAINER, "dave2_robot_model.pth")
+
+# EMA smoothing factor for AI steering (0 = no smoothing, 1 = frozen)
+STEERING_EMA_ALPHA = 0.4
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -147,25 +154,38 @@ def camera_thread():
 def control_thread():
     try:
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client.setblocking(False)   # Never block the control loop on a full send buffer
     except socket.error as e:
         print(f"Socket error: {e}")
         stop_event.set()
         return
 
+    seq = 0
     next_send_time = time.time()
     while not stop_event.is_set():
         now = time.time()
         sleep_for = next_send_time - now
         if sleep_for > 0:
             time.sleep(sleep_for)
-        next_send_time = max(next_send_time + FRAME_INTERVAL, time.time())
+        # Drift-compensated ticker: catches up after a lag spike without
+        # flooding; advances by exactly CONTROL_INTERVAL each iteration.
+        next_send_time = max(next_send_time + CONTROL_INTERVAL, time.time())
 
         with state_lock:
             speed    = shared_state['speed']
             steering = shared_state['steering']
 
+        # Packet format: "seq,speed,steering" — keeps ASCII compatibility
+        # with robot firmware while adding an out-of-order guard.
+        # seq wraps at 65535 (uint16 range) to stay compact.
+        payload = f"{seq & 0xFFFF},{speed},{steering}".encode()
+        seq += 1
+
         try:
-            client.sendto(f"{speed},{steering}".encode(), (ROBOT_IP, PORT))
+            client.sendto(payload, (ROBOT_IP, PORT))
+        except BlockingIOError:
+            # Send buffer momentarily full — skip this tick, do not block.
+            pass
         except socket.error as e:
             print(f"Send error: {e}")
 
@@ -313,9 +333,16 @@ def main():
                 frame, save_frame = None, None
 
             if is_ai_mode and engine is not None and frame is not None:
-                ai_steering, ai_throttle = engine.predict_frame(save_frame if save_frame is not None else frame)
+                raw_ai_steering, ai_throttle = engine.predict_frame(save_frame if save_frame is not None else frame)
+                # EMA smoothing: blend new prediction with previous steering
+                # to suppress per-frame jitter from the model.
+                prev_steering = shared_state['steering']
+                smooth_steering = int(
+                    STEERING_EMA_ALPHA * raw_ai_steering
+                    + (1.0 - STEERING_EMA_ALPHA) * prev_steering
+                )
                 speed    = 0 if is_stop else ai_throttle
-                steering = 0 if is_stop else ai_steering
+                steering = 0 if is_stop else smooth_steering
             else:
                 raw_speed = paddle_speed[current_paddle]
                 speed    = int(raw_speed * 100 * 0.5) if raw_speed > DEADZONE else 0
@@ -344,6 +371,8 @@ def main():
                 }
                 if not record_queue.full():
                     record_queue.put((image_filename, save_frame, robot_data))
+                else:
+                    print(f"[WARN] record_queue full — frame #{idx} dropped. Disk writer may be too slow.")
                 record_index_ref[0] += 1
 
             # ----------------------------------------------------------------

@@ -27,6 +27,12 @@ class SelfDrivingDataset(Dataset):
 
         image_path = os.path.join(self.base_image_dir, record['cam/image_array'])
         img = cv2.imread(image_path)
+        if img is None:
+            raise FileNotFoundError(
+                f"[Dataset] Image not found: '{image_path}' "
+                f"(catalog entry index={record.get('index', '?')}). "
+                "Run catalog_manager.py to clean missing entries."
+            )
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         img = cv2.resize(img, (200, 66))

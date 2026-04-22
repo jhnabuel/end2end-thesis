@@ -10,6 +10,8 @@ import pickle
 ARENA_IDS = {24, 42, 66, 70}
 CAR_ID = 0
 SAVE_AS_BLACK_CANVAS = True
+# Skip arena detection after this many consecutive stable frames to save CPU
+ARENA_STABILITY_SKIP = 10
 
 def pixel_to_cell(x, y, grid_size):
     return (x // grid_size, y // grid_size)
@@ -52,6 +54,8 @@ def main_path_renderer():
     cv2.resizeWindow("Path View", 1000, 1000)
     print("Press 'q' to quit.")
 
+    arena_stable_frames = 0   # consecutive frames where arena matrix was reused
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -61,22 +65,30 @@ def main_path_renderer():
         frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
 
         # --- Arena detection (on raw frame) ---
-        arena_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        detected_corners, detected_ids, _ = shared_detector.detectMarkers(arena_gray)
+        # Skip full ArUco detection once the homography is stable; we only
+        # re-run it every ARENA_STABILITY_SKIP frames to save CPU.
+        if warper.matrix is None or arena_stable_frames >= ARENA_STABILITY_SKIP:
+            arena_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            detected_corners, detected_ids, _ = shared_detector.detectMarkers(arena_gray)
 
-        arena_corners_filtered, arena_ids_list = [], []
-        if detected_ids is not None:
-            for corner, mid in zip(detected_corners, detected_ids.flatten()):
-                if mid in ARENA_IDS:
-                    arena_corners_filtered.append(corner)
-                    arena_ids_list.append([mid])
+            arena_corners_filtered, arena_ids_list = [], []
+            if detected_ids is not None:
+                for corner, mid in zip(detected_corners, detected_ids.flatten()):
+                    if mid in ARENA_IDS:
+                        arena_corners_filtered.append(corner)
+                        arena_ids_list.append([mid])
 
-        arena_ids_arr = np.array(arena_ids_list) if arena_ids_list else None
-        warped = warper.generate_arena(frame, arena_corners_filtered, arena_ids_arr)  
+            arena_ids_arr = np.array(arena_ids_list) if arena_ids_list else None
+            warped = warper.generate_arena(frame, arena_corners_filtered, arena_ids_arr)
+            arena_stable_frames = 0
+        else:
+            # Reuse existing homography — warp directly without re-detecting
+            warped = warper.generate_arena(frame, [], None)
+            arena_stable_frames += 1
 
         # --- Car detection (on warped frame) ---
         car_gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-        detected_car_corners, detected_car_ids, _ = shared_detector.detectMarkers(car_gray) 
+        detected_car_corners, detected_car_ids, _ = shared_detector.detectMarkers(car_gray)
 
         car_corners_filtered, car_ids_list = [], []
         if detected_car_ids is not None:
@@ -86,12 +98,17 @@ def main_path_renderer():
                     car_ids_list.append([mid])
 
         car_ids_arr = np.array(car_ids_list) if car_ids_list else None
+        predetected = (car_corners_filtered, car_ids_arr)
 
-        out, detected_corners = renderer.generate_cnn_frame(warped, predetected=(car_corners_filtered, car_ids_arr))
+        # --- Render display frame (with path overlay on real background) ---
+        out, detected_corners = renderer.generate_cnn_frame(warped, predetected=predetected)
+
+        # --- Render save frame (reuse same predetected corners, no re-detection) ---
         if SAVE_AS_BLACK_CANVAS:
-
             black_canvas = np.zeros_like(warped)
-            save_frame, _ = renderer.generate_cnn_frame(black_canvas, predetected = (car_corners_filtered, car_ids_arr), black_bg =  True)
+            save_frame, _ = renderer.generate_cnn_frame(
+                black_canvas, predetected=predetected, black_bg=True
+            )
         else:
             save_frame = warped.copy()
 
