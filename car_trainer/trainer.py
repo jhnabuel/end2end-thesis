@@ -71,26 +71,23 @@ def seconds_to_hms(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
 
 
-def compute_mae(outputs, labels):
-    steering_out, throttle_out = outputs
-    steering_lbl, throttle_lbl = labels[:, 0:1], labels[:, 1:2]
-    mae_s = torch.mean(torch.abs(steering_out - steering_lbl)).item()
-    mae_t = torch.mean(torch.abs(throttle_out - throttle_lbl)).item()
-    return (mae_s + mae_t) / 2.0
+def compute_mae(steering_out, labels):
+    steering_lbl = labels[:, 0:1]
+    return torch.mean(torch.abs(steering_out - steering_lbl)).item()
+
 
 def evaluate(model, dataloader, criterion, device):
     """Run one pass over *dataloader* and return (avg_mse, avg_mae)."""
     model.eval()
     total_loss = 0.0
-    total_mae = 0.0
+    total_mae  = 0.0
     with torch.no_grad():
         for images, labels in dataloader:
             images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            steering_out, throttle_out = outputs
-            steering_lbl, throttle_lbl = labels[:, 0:1], labels[:, 1:2]
-            total_loss += (criterion(steering_out, steering_lbl) + criterion(throttle_out, throttle_lbl)).item()
-            total_mae += compute_mae(outputs, labels)
+            steering_out = model(images)
+            steering_lbl = labels[:, 0:1]
+            total_loss += criterion(steering_out, steering_lbl).item()
+            total_mae  += compute_mae(steering_out, labels)
     n = len(dataloader)
     return total_loss / n, total_mae / n
 
@@ -192,13 +189,13 @@ def train_model(
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(images)
-            steering_out, throttle_out = outputs
-            steering_lbl, throttle_lbl = labels[:, 0:1], labels[:, 1:2]
-            loss = criterion(steering_out, steering_lbl) + criterion(throttle_out, throttle_lbl)
+            steering_out = model(images)
+            steering_lbl = labels[:, 0:1]
+            loss = criterion(steering_out, steering_lbl)
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-            outputs_detached = (steering_out.detach(), throttle_out.detach())
+            outputs_detached = (steering_out.detach())
             running_mae += compute_mae(outputs_detached, labels)
 
 
