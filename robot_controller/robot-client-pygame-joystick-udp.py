@@ -306,6 +306,8 @@ def main():
                             with state_lock:
                                 shared_state['is_ai_mode'] = not shared_state['is_ai_mode']
                                 mode = shared_state['is_ai_mode']
+                                if mode:
+                                    shared_state['steering'] = 0  # reset EMA seed on activation
                             print(f"[AI] AI mode {'ENABLED' if mode else 'DISABLED'}.")
 
                     # Button 4 → gear down
@@ -332,17 +334,26 @@ def main():
             except Empty:
                 frame, save_frame = None, None
 
-            if is_ai_mode and engine is not None and frame is not None:
-                raw_ai_steering, ai_throttle = engine.predict_frame(save_frame if save_frame is not None else frame)
-                # EMA smoothing: blend new prediction with previous steering
-                # to suppress per-frame jitter from the model.
-                prev_steering = shared_state['steering']
-                smooth_steering = int(
-                    STEERING_EMA_ALPHA * raw_ai_steering
-                    + (1.0 - STEERING_EMA_ALPHA) * prev_steering
-                )
-                speed    = 0 if is_stop else ai_throttle
-                steering = 0 if is_stop else smooth_steering
+            if is_ai_mode and engine is not None:
+                if save_frame is not None:
+                    raw_speed = paddle_speed[current_paddle]
+                    human_throttle = int(raw_speed * 100 * 0.5) if raw_speed > DEADZONE else 0
+
+                    raw_ai_steering, _ = engine.predict_frame(save_frame, throttle=human_throttle)
+
+                    with state_lock:
+                        prev_steering = shared_state['steering']
+                    smooth_steering = int(
+                        STEERING_EMA_ALPHA * raw_ai_steering
+                        + (1.0 - STEERING_EMA_ALPHA) * prev_steering
+                    )
+
+                    speed    = 0 if is_stop else human_throttle
+                    steering = 0 if is_stop else smooth_steering  # ← smooth, not raw
+                else:
+                    # Marker lost — hold last known values, don't predict
+                    speed    = 0
+                    steering = 0
             else:
                 raw_speed = paddle_speed[current_paddle]
                 speed    = int(raw_speed * 100 * 0.5) if raw_speed > DEADZONE else 0

@@ -98,7 +98,7 @@ class InferenceEngine:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def predict_frame(self, bgr_frame: np.ndarray) -> tuple[int, int]:
+    def predict_frame(self, bgr_frame: np.ndarray, throttle: int = 45) -> tuple[int, int]:
         """
         Run a single forward pass on a raw OpenCV BGR frame.
 
@@ -110,18 +110,17 @@ class InferenceEngine:
         """
         tensor = self._preprocess(bgr_frame)
         with torch.no_grad():
-            raw_steering,raw_throttle = self.model(tensor)
-        steering = int(raw_steering * STEERING_SCALE)
-        throttle = int(raw_throttle * THROTTLE_SCALE)  
+            raw_steering = self.model(tensor)
+        steering = int(round(raw_steering.item() * STEERING_SCALE))
         return steering, throttle
 
-    def predict_frame_raw(self, bgr_frame: np.ndarray) -> float:
+    def predict_frame_raw(self, bgr_frame: np.ndarray) -> torch.Tensor:
         """Return the raw tanh output in [-1, 1] without scaling."""
         tensor = self._preprocess(bgr_frame)
         with torch.no_grad():
-            raw_steering,raw_throttle = self.model(tensor)
-            print(f"Raw model outputs: steering={raw_steering}, throttle={raw_throttle}")
-            return raw_steering,raw_throttle
+            raw_steering = self.model(tensor)  # single value now
+        print(f"Raw model output: steering={raw_steering.item():.4f}")
+        return raw_steering
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +185,6 @@ def load_model(weights_path: str = DEFAULT_WEIGHTS, device: torch.device | None 
 
 
 def predict_steering_from_path(image_path: str, weights_path: str = DEFAULT_WEIGHTS) -> float:
-    """Load model & predict from a file path. Matches dataset.py preprocessing."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_model(weights_path, device)
     bgr = cv2.imread(image_path)
@@ -195,11 +193,10 @@ def predict_steering_from_path(image_path: str, weights_path: str = DEFAULT_WEIG
     engine = InferenceEngine.__new__(InferenceEngine)
     engine.device = device
     engine.model = model
-    raw_steering, raw_throttle = engine.predict_frame_raw(bgr)
-    steering = int(raw_steering * STEERING_SCALE)
+    raw_steering = engine.predict_frame_raw(bgr)  # one value
+    steering = int(raw_steering.item() * STEERING_SCALE)
     print(f"Predicted steering (raw={raw_steering.item():.4f})  →  {steering}  [range ≈ -50 … +50]")
-    print(f"Predicted throttle (raw={raw_throttle.item():.4f})  →  {int(raw_throttle * THROTTLE_SCALE)}  [range ≈ 0 … 100]")
-    return raw_steering, raw_throttle
+    return raw_steering.item()
 
 
 # ---------------------------------------------------------------------------

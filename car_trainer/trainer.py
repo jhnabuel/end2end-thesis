@@ -188,15 +188,13 @@ def train_model(
         for images, labels in train_loader:
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
-            outputs = model(images)
             steering_out = model(images)
             steering_lbl = labels[:, 0:1]
             loss = criterion(steering_out, steering_lbl)
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-            outputs_detached = (steering_out.detach())
-            running_mae += compute_mae(outputs_detached, labels)
+            running_mae += compute_mae(steering_out.detach(), labels)
 
 
         train_mse = running_loss / len(train_loader)
@@ -320,7 +318,7 @@ def train_model(
             "optimiser":          "Adam",
             "loss_function":      "MSELoss",
             "scheduler":          "ReduceLROnPlateau (factor=0.5, patience=3)",
-            "dropout":            0.5,
+            "dropout":            0.1,
             "checkpoint_every_n_epochs": checkpoint_every,
         },
         "training_results": {
