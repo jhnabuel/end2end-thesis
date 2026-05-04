@@ -301,7 +301,7 @@ def train_model(
             "val_split_ratio":  val_split,
             "batch_size":       batch_size,
             "num_workers":      num_workers,
-            "input_shape":      [3, 66, 200],
+            "input_shape":      [3, 200, 200],
             "label":            "normalised steering angle  (raw_angle / 50.0)",
             "label_range":      [-1.0, 1.0],
         },

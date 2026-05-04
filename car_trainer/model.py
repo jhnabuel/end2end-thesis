@@ -24,8 +24,8 @@ class DAVE2(nn.Module):
         self.bn5   = nn.BatchNorm2d(64)
 
         # Fully connected layers with BatchNorm
-        # 64 * 1 * 18 = 1152 verified for input size 66x200
-        self.fc1    = nn.Linear(64 * 1 * 18, 100)
+        # 64 * 18 * 18 = 20736 verified for input size 200x200
+        self.fc1    = nn.Linear(64 * 18 * 18, 100)
         self.bn_fc1 = nn.BatchNorm1d(100)
         
         self.fc2    = nn.Linear(100, 50)

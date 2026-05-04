@@ -1,5 +1,6 @@
 #test_path.renderer.py
 import cv2.aruco as aruco
+from egocentric_renderer import EgocentricRenderer
 from path_renderer import PathRenderer
 from path_utils import load_path_points
 from robot_aoi import ArenaWarper
@@ -10,6 +11,7 @@ import pickle
 ARENA_IDS = {24, 42, 66, 70}
 CAR_ID = 0
 SAVE_AS_BLACK_CANVAS = True
+EGO_CROP_SIZE = 200
 # Skip arena detection after this many consecutive stable frames to save CPU
 ARENA_STABILITY_SKIP = 10
 
@@ -48,6 +50,7 @@ def main_path_renderer():
         return
 
     renderer = PathRenderer(path_polyline=path_polyline, detector=shared_detector, grid_size=GRID_SIZE)
+    ego_renderer = EgocentricRenderer(renderer, crop_size=EGO_CROP_SIZE)
     warper = ArenaWarper()
 
     cv2.namedWindow("Path View", cv2.WINDOW_NORMAL)
@@ -103,14 +106,10 @@ def main_path_renderer():
         # --- Render display frame (with path overlay on real background) ---
         out, detected_corners = renderer.generate_cnn_frame(warped, predetected=predetected)
 
-        # --- Render save frame (reuse same predetected corners, no re-detection) ---
-        if SAVE_AS_BLACK_CANVAS:
-            black_canvas = np.zeros_like(warped)
-            save_frame, _ = renderer.generate_cnn_frame(
-                black_canvas, predetected=predetected, black_bg=True
-            )
-        else:
-            save_frame = warped.copy()
+        # --- Render save frame (egocentric crop around the car) ---
+        save_frame, _ = ego_renderer.process_egocentric_frame(
+            warped, predetected=predetected, black_bg=SAVE_AS_BLACK_CANVAS
+        )
 
         renderer.draw_debug(out)
         cv2.imshow("Path View", out)

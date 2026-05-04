@@ -17,7 +17,6 @@ import sys
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
 
 # ---------------------------------------------------------------------------
 # Path fix so this module can be imported from robot_controller/ too
@@ -32,7 +31,7 @@ from model import DAVE2  # noqa: E402
 # Constants
 # ---------------------------------------------------------------------------
 DEFAULT_WEIGHTS = os.path.join(_THIS_DIR, "dave2_robot_model.pth")
-IMG_H, IMG_W = 66, 200
+IMG_H, IMG_W = 200, 200
 THROTTLE_SCALE = 100.0
 STEERING_SCALE = 50.0
 DEFAULT_THROTTLE = 28
@@ -81,8 +80,8 @@ class InferenceEngine:
     # ------------------------------------------------------------------
     def _preprocess(self, bgr_frame: np.ndarray) -> torch.Tensor:
         """
-        Mirror dataset.py preprocessing:
-          BGR → RGB → resize (200, 66) → float32 → CHW tensor → batch dim.
+                Mirror dataset.py preprocessing:
+                    BGR → RGB → resize (200, 200) → float32 → CHW tensor → batch dim.
         """
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(rgb, (IMG_W, IMG_H))           # (width, height)
@@ -90,7 +89,7 @@ class InferenceEngine:
         tensor = (
             torch.from_numpy(arr)
             .permute(2, 0, 1)                               # HWC → CHW
-            .unsqueeze(0)                                   # → (1, 3, 66, 200)
+            .unsqueeze(0)                                   # → (1, 3, 200, 200)
             .to(self.device)
         )
         return tensor

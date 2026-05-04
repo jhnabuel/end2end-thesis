@@ -1,10 +1,12 @@
 import json
 import os
+
 import cv2
-import numpy as np
 from torch.utils.data import Dataset, DataLoader
-import torch.optim as optim
 import torch
+
+IMG_W = 200
+IMG_H = 200
 
 class SelfDrivingDataset(Dataset):
     def __init__(self, catalog_path, base_image_dir):
@@ -35,7 +37,7 @@ class SelfDrivingDataset(Dataset):
             )
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        img = cv2.resize(img, (200, 66))
+        img = cv2.resize(img, (IMG_W, IMG_H))
 
         image_tensor = torch.from_numpy(img).float().permute(2, 0, 1)
 
@@ -57,7 +59,7 @@ if __name__ == "__main__":
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
     image, label = dataset[0]
 
-    print("Image shape:", image.shape)   # should be [3, 66, 200]
+    print("Image shape:", image.shape)   # should be [3, 200, 200]
     print("Label:", label)
 
     train_features, train_labels = next(iter(dataloader))
