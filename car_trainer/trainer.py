@@ -123,13 +123,15 @@ def train_model(
     # ------------------------------------------------------------------
     full_dataset = SelfDrivingDataset(catalog_file, image_dir)
     total_samples = len(full_dataset)
+    full_dataset.samples.sort(key=lambda r: r['index'])
 
     val_size   = max(1, int(total_samples * val_split))
     train_size = total_samples - val_size
-    train_ds, val_ds = random_split(
-        full_dataset, [train_size, val_size],
-        generator=torch.Generator().manual_seed(42)
-    )
+
+    # Slice — first 85% train, last 15% val (contiguous blocks)
+    from torch.utils.data import Subset
+    train_ds = Subset(full_dataset, range(0, train_size))
+    val_ds   = Subset(full_dataset, range(train_size, total_samples))
 
     train_loader = DataLoader(train_ds, batch_size=batch_size,
                               shuffle=True,  num_workers=num_workers)
