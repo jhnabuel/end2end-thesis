@@ -7,7 +7,7 @@ import math
 
 def project_onto_path(px, py, path):
     """Project point (px,py) onto the polyline. Returns (arc_length, distance_to_path, projected_point)."""
-    best_dist = float('inf')
+    best_dist_sq = float('inf')
     best_arc = 0.0
     best_pt = path[0].astype(np.float64)
     best_tangent = (path[1] - path[0]).astype(np.float64)   
