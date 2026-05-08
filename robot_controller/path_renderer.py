@@ -10,7 +10,10 @@ def project_onto_path(px, py, path):
     best_dist = float('inf')
     best_arc = 0.0
     best_pt = path[0].astype(np.float64)
+    best_tangent = (path[1] - path[0]).astype(np.float64)   
     cumulative = 0.0
+
+    car = np.array([px, py], dtype=np.float64)
 
     for i in range(len(path) - 1):
         a = path[i].astype(np.float64)
@@ -20,17 +23,29 @@ def project_onto_path(px, py, path):
         if seg_len < 1e-6:
             cumulative += seg_len
             continue
-        t = np.clip(np.dot(
-            np.array([px, py], dtype=np.float64) - a, ab) / (seg_len * seg_len), 0.0, 1.0)
+        
+        
+        t = np.clip(np.dot(car - a, ab) / (seg_len * seg_len), 0.0, 1.0)
         proj = a + t * ab
-        d = np.linalg.norm(np.array([px, py]) - proj)
-        if d < best_dist:
-            best_dist = d
-            best_arc = cumulative + t * seg_len
-            best_pt = proj
+        d_sq = float(np.dot(car - proj, car - proj))
+        
+        if d_sq < best_dist_sq:
+            best_dist_sq = d_sq
+            best_arc     = cumulative + t * seg_len
+            best_pt      = proj
+            best_tangent = ab
+
+        # Signed CTE via cross product: tangent × (car − nearest_point)
+        # positive → car is to the RIGHT of the path direction
+        # negative → car is to the LEFT
+        tx, ty = float(best_tangent[0]), float(best_tangent[1])
+        ex, ey = px - best_pt[0], py - best_pt[1]
+        seg_len = math.sqrt(tx * tx + ty * ty + 1e-9)
+        signed_cte = (tx * ey - ty * ex) / seg_len
+
         cumulative += seg_len
 
-    return best_arc, best_dist, best_pt
+    return best_arc, signed_cte, best_pt, best_tangent
 
 
 def sample_path_by_arc(path, arc_start, arc_end, spacing=2.0):
@@ -162,8 +177,15 @@ class PathRenderer:
             return np.concatenate([part1, part2], axis=0)
 
     def generate_cnn_frame(self, frame, predetected=None, draw_lookahead=True, black_bg = False, ):
+
+        _empty_metrics = {
+            'cte': 0.0, 'heading_error': 0.0,
+            'car_arc': 0.0, 'on_path': False,
+        }
+
         output = np.zeros_like(frame) if black_bg else frame.copy()
 
+        #  --- ArUco detection ---
         if predetected is not None:
             corners, ids = predetected
             ids = ids if (ids is not None and len(ids) > 0) else None
@@ -176,7 +198,7 @@ class PathRenderer:
             self.frames_lost += 1
             if self.last_corners is None or self.frames_lost > 5:
                 self.last_corners = None
-                return output, None
+                return output, None, _empty_metrics
             c = self.last_corners
         else:
             matched = False
@@ -190,11 +212,13 @@ class PathRenderer:
             if not matched:
                 self.frames_lost += 1
                 if self.last_corners is None or self.frames_lost > 5:
-                    return output, None
+                    return output, None, _empty_metrics
                 c = self.last_corners
 
+         # --- Car centre and heading (from ArUco corners) ---
         cx = int(np.mean(c[:, 0]))
         cy = int(np.mean(c[:, 1]))
+
         if not black_bg:    
             cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128, 128, 128),
                         self.track_thickness, cv2.LINE_8)
@@ -208,11 +232,29 @@ class PathRenderer:
         top_mid_y    = (c[2][1] + c[3][1]) / 2.0
         bottom_mid_x = (c[0][0] + c[1][0]) / 2.0
         bottom_mid_y = (c[0][1] + c[1][1]) / 2.0
+
+        # Car heading angle in warped-frame space
         angle = math.atan2(top_mid_y - bottom_mid_y, top_mid_x - bottom_mid_x)
         cos_a, sin_a = math.cos(angle), math.sin(angle)
-        
-        car_arc, dist, _ = project_onto_path(cx, cy, self.path_polyline)
-        if dist < self.grid_size:
+
+        # --- Project car onto path → CTE + heading error ---
+        car_arc, signed_cte, _, tangent = project_onto_path(cx, cy, self.path_polyline)
+        raw_dist = abs(signed_cte)
+        on_path = raw_dist < self.grid_size
+
+        # Heading Error: difference between car angle and path tangle angle
+        path_angle    = math.atan2(float(tangent[1]), float(tangent[0]))
+        heading_error = angle - path_angle
+        heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
+
+        metrics = {
+            'cte':           signed_cte if on_path else 0.0,
+            'heading_error': heading_error if on_path else 0.0,
+            'car_arc':       car_arc,
+            'on_path':       on_path,
+        }
+
+        if on_path:
             # path tangent 
             idx = np.searchsorted(self.smooth_arc_index, car_arc)
             idx = np.clip(idx, 0, len(self.smooth_pts_int) - 6)
@@ -220,9 +262,8 @@ class PathRenderer:
             p2 = self.smooth_pts_int[idx + 5]
             path_dx = float(p2[0] - p1[0])
             path_dy = float(p2[1] - p1[1])
-
-            # Dot product : if robot facing the same direction or not
-            dot = cos_a * path_dx + sin_a * path_dy
+            dot   = cos_a * path_dx + sin_a * path_dy
+        
             if dot >= 0:
                 # Clockwise — normal case
                 arc_start = max(0.0, car_arc - self.backward_px)
@@ -271,14 +312,19 @@ class PathRenderer:
         cv2.polylines(output, [np.int32(self.path_polyline)], False, (0, 255, 255),
               max(2, self.track_thickness // 30
                   ), cv2.LINE_8)
-        return output, c
+        
+        return output, c, metrics
 
     def draw_debug(self, frame):
         if self.last_corners is not None:
             c = self.last_corners
             cx = int(np.mean(c[:, 0]))
             cy = int(np.mean(c[:, 1]))
-            car_arc, dist, _ = project_onto_path(cx, cy, self.path_polyline)
-            cv2.putText(frame, f"car:({cx},{cy}) arc={car_arc:.0f}/{self.total_arc:.0f} d={dist:.1f}",
-                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
+            car_arc, signed_cte, _, _ = project_onto_path(cx, cy, self.path_polyline)
+            cv2.putText(
+                frame,
+                f"car:({cx},{cy}) arc={car_arc:.0f}/{self.total_arc:.0f} "
+                f"cte={signed_cte:.1f}px",
+                (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA,
+            )
         return frame

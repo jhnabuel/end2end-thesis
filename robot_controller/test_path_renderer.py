@@ -58,7 +58,8 @@ def main_path_renderer():
     print("Press 'q' to quit.")
 
     arena_stable_frames = 0   # consecutive frames where arena matrix was reused
-
+    _empty_metrics = {'cte': 0.0, 'heading_error': 0.0, 'seg_idx': 0}
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -103,19 +104,27 @@ def main_path_renderer():
         car_ids_arr = np.array(car_ids_list) if car_ids_list else None
         predetected = (car_corners_filtered, car_ids_arr)
 
-        # --- Render display frame (with path overlay on real background) ---
-        out, detected_corners = renderer.generate_cnn_frame(warped, predetected=predetected)
-
-        # --- Render save frame (egocentric crop around the car) ---
-        save_frame, _ = ego_renderer.process_egocentric_frame(
+        # --- Display frame (path overlay on real background) ---
+        # generate_cnn_frame now returns (frame, corners, metrics)
+        # We only need the display frame here; metrics come from ego_renderer below.
+        out, _, _ = renderer.generate_cnn_frame(warped, predetected=predetected)
+ 
+        # --- Egocentric save frame + CTE / heading metrics ---
+        ego_result = ego_renderer.process_egocentric_frame(
             warped, predetected=predetected, black_bg=SAVE_AS_BLACK_CANVAS
         )
 
+        if ego_result[0] is not None:
+            save_frame, corners, metrics = ego_result
+        else:
+            save_frame = None
+            metrics =  _empty_metrics
+        
         renderer.draw_debug(out)
         cv2.imshow("Path View", out)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        yield out, save_frame
+        yield out, save_frame, metrics
 
     cap.release()
     cv2.destroyAllWindows()

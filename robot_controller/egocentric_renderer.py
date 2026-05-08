@@ -13,11 +13,17 @@ class EgocentricRenderer:
 
     def process_egocentric_frame(self, raw_frame, predetected=None, black_bg: bool = True):
         """Render BEV overlays, then rotate/crop so the car faces up."""
-        frame, corners = self.path_renderer.generate_cnn_frame(
+
+        _empty_metrics = {
+            'cte': 0.0, 'heading_error': 0.0,
+            'car_arc': 0.0, 'on_path': False,
+        }
+
+        frame, corners, metrics = self.path_renderer.generate_cnn_frame(
             raw_frame, predetected=predetected, black_bg=black_bg
         )
         if corners is None:
-            return None, None
+            return None, None, _empty_metrics
 
         center_x = float(np.mean(corners[:, 0]))
         center_y = float(np.mean(corners[:, 1]))
@@ -36,4 +42,4 @@ class EgocentricRenderer:
         M[1, 2] += self.half_crop - center_y
         ego = cv2.warpAffine(frame, M, (self.crop_size, self.crop_size))
 
-        return ego, corners
+        return ego, corners,metrics
