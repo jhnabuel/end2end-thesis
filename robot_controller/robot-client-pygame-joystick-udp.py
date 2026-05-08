@@ -8,6 +8,7 @@ _CAR_TRAINER = os.path.join(_ROOT, "car_trainer")
 if _CAR_TRAINER not in sys.path:
     sys.path.insert(0, _CAR_TRAINER)
 
+import numpy as np
 import cv2
 import socket
 import pygame
@@ -16,6 +17,7 @@ from datetime import datetime
 import json
 import threading
 from queue import Queue, Empty
+import math
 
 from test_path_renderer import main_path_renderer
 from inference import InferenceEngine
@@ -38,6 +40,8 @@ WEIGHTS_PATH      = os.path.join(_CAR_TRAINER, "dave2_robot_model.pth")
 # EMA smoothing factor for AI steering (0 = no smoothing, 1 = frozen)
 STEERING_EMA_ALPHA = 0.4
 
+
+CTE_WARN_THRESHOLD = 40  
 # ---------------------------------------------------------------------------
 # Colors
 # ---------------------------------------------------------------------------
@@ -48,6 +52,41 @@ RED    = (255, 0,   0)
 BLUE   = (0,   100, 255)
 YELLOW = (255, 220, 0)
 PURPLE = (160, 60,  255)
+ORANGE = (255, 140, 0)
+
+# ---------------------------------------------------------------------------
+# CTETracker
+# ---------------------------------------------------------------------------
+ 
+class CTETracker:
+    """Accumulates per-frame CTE values and computes RMSE / mean-abs."""
+ 
+    def __init__(self):
+        self._history = []
+ 
+    def update(self, cte: float):
+        self._history.append(cte)
+ 
+    @property
+    def rmse(self) -> float:
+        if not self._history:
+            return 0.0
+        arr = np.array(self._history)
+        return float(np.sqrt(np.mean(arr ** 2)))
+ 
+    @property
+    def mean_abs(self) -> float:
+        if not self._history:
+            return 0.0
+        return float(np.mean(np.abs(self._history)))
+ 
+    @property
+    def count(self) -> int:
+        return len(self._history)
+ 
+    def reset(self):
+        self._history.clear()
+
 
 # ---------------------------------------------------------------------------
 # Shared state
@@ -141,13 +180,13 @@ def camera_thread():
         result = next(camera_generator, None)
         if result is None:
             break
-        frame, save_frame = result
+        frame, save_frame, metrics = result
         if frame_queue.full():
             try:
                 frame_queue.get_nowait()
             except Empty:
                 pass
-        frame_queue.put((frame, save_frame))
+        frame_queue.put((frame, save_frame, metrics))
     stop_event.set()
 
 
@@ -244,7 +283,14 @@ def main():
     delete_flash_until = 0.0
     delete_flash_msg   = ""
 
+    # CTE tracking (AI evaluation run)
+    cte_tracker = CTETracker()
+    run_log     = []
+
     # Safe defaults so display never crashes before first loop tick
+    cte           = 0.0
+    heading_error = 0.0
+    seg_idx       = 0
     speed    = 0
     steering = 0
     is_ai_mode   = False
@@ -310,6 +356,28 @@ def main():
                                     shared_state['steering'] = 0  # reset EMA seed on activation
                             print(f"[AI] AI mode {'ENABLED' if mode else 'DISABLED'}.")
 
+                             # Turning AI mode OFF → dump run log
+                            if not mode and run_log:
+                                run_ts   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                                log_path = os.path.join(
+                                    os.path.dirname(CATALOG_FILE),
+                                    f"run_log_{run_ts}.json"
+                                )
+                                summary = {
+                                    'rmse_px':         round(cte_tracker.rmse, 4),
+                                    'mean_abs_cte_px': round(cte_tracker.mean_abs, 4),
+                                    'total_frames':    cte_tracker.count,
+                                    'frames':          run_log,
+                                }
+                                with open(log_path, 'w') as f:
+                                    json.dump(summary, f, indent=2)
+                                print(
+                                    f"[RUN LOG] RMSE={cte_tracker.rmse:.2f}px "
+                                    f"→ {log_path}"
+                                )
+                                cte_tracker.reset()
+                                run_log.clear()
+
                     # Button 4 → gear down
                     elif event.button == 4:
                         current_paddle = max(current_paddle - 1, 0)
@@ -330,9 +398,15 @@ def main():
                 is_recording = shared_state['is_recording']
 
             try:
-                frame, save_frame = frame_queue.get_nowait()
+                frame, save_frame, metrics = frame_queue.get_nowait()
+                cte = metrics.get('cte', 0.0)
+                heading_error = metrics.get('heading_error', 0.0)
+                seg_idx = metrics.get('seg_idx', 0)
+
             except Empty:
-                frame, save_frame = None, None
+                frame, save_frame, metrics = None, None, {}
+                cte = heading_error = 0.0
+                seg_idx = 0
 
             if is_ai_mode and engine is not None:
                 if save_frame is not None:
@@ -349,7 +423,20 @@ def main():
                     )
 
                     speed    = 0 if is_stop else human_throttle
-                    steering = 0 if is_stop else smooth_steering  # ← smooth, not raw
+                    steering = 0 if is_stop else smooth_steering  # ← smooth, not 
+                    
+                    cte_tracker.update(cte)
+                    run_log.append({
+                        'frame':         record_index_ref[0],
+                        'timestamp_ms':  int(time.time() * 1000),
+                        'cte_px':        round(cte, 4),
+                        'heading_error': round(heading_error, 4),
+                        'heading_deg':   round(math.degrees(heading_error), 2),
+                        'steering':      steering,
+                        'speed':         speed,
+                        'seg_idx':       seg_idx,
+                    })
+
                 else:
                     # Marker lost — hold last known values, don't predict
                     speed    = 0
@@ -379,6 +466,8 @@ def main():
                     'angle':           steering,
                     'user/mode':       'ai' if is_ai_mode else 'user',
                     'throttle':        speed,
+                    'cte':             round(cte, 4),
+                    'heading_error':   round(heading_error, 4)
                 }
                 if not record_queue.full():
                     record_queue.put((image_filename, save_frame, robot_data))
@@ -401,8 +490,16 @@ def main():
             draw_text(f"Frame#: {record_index_ref[0]}", 20, y + 58,  YELLOW, small=True)
             draw_text(f"Recording: {'ON' if is_recording else 'OFF'}", 20, y + 78,
                       GREEN if is_recording else WHITE)
+            
             draw_text(f"Gear: {current_paddle}", 20, y + 98)
 
+             # CTE Display
+            cte_color = RED if abs(cte) > CTE_WARN_THRESHOLD else YELLOW
+            draw_text(f"CTE:  {cte:+.1f}px", 20, y + 130, cte_color, small=True)
+            draw_text(f"Hdg:  {math.degrees(heading_error):+.1f}°", 20, y + 150, YELLOW, small=True)
+            draw_text(f"RMSE: {cte_tracker.rmse:.1f}px", 20, y + 170, WHITE, small=True)
+
+            
             stop_color = RED if is_stop else (50, 50, 50)
             pygame.draw.rect(screen, stop_color, (140, y + 112, 100, 36))
             draw_text("Stop", 160, y + 120, BLACK if is_stop else WHITE)
