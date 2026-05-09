@@ -35,15 +35,17 @@ def project_onto_path(px, py, path):
             best_pt      = proj
             best_tangent = ab
 
+        cumulative += seg_len
+        
         # Signed CTE via cross product: tangent × (car − nearest_point)
         # positive → car is to the RIGHT of the path direction
         # negative → car is to the LEFT
-        tx, ty = float(best_tangent[0]), float(best_tangent[1])
-        ex, ey = px - best_pt[0], py - best_pt[1]
-        seg_len = math.sqrt(tx * tx + ty * ty + 1e-9)
-        signed_cte = (tx * ey - ty * ex) / seg_len
+    tx, ty = float(best_tangent[0]), float(best_tangent[1])
+    ex, ey = px - best_pt[0], py - best_pt[1]
+    seg_len = math.sqrt(tx * tx + ty * ty + 1e-9)
+    signed_cte = (tx * ey - ty * ex) / seg_len
 
-        cumulative += seg_len
+        
 
     return best_arc, signed_cte, best_pt, best_tangent
 
@@ -82,18 +84,61 @@ def sample_path_by_arc(path, arc_start, arc_end, spacing=2.0):
     return np.array(points) if points else np.empty((0, 2))
 
 
-def chaikin_smooth(pts, iterations=3):
-    """Chaikin's corner-cutting: iteratively replace corners with smooth curves."""
-    for _ in range(iterations):
-        if len(pts) < 2:
-            return pts
-        q = 0.75 * pts[:-1] + 0.25 * pts[1:]
-        r = 0.25 * pts[:-1] + 0.75 * pts[1:]
-        smoothed = np.empty((2 * len(q), 2), dtype=pts.dtype)
-        smoothed[0::2] = q
-        smoothed[1::2] = r
-        pts = smoothed
-    return pts
+def bezier_corners(path, num_pts=20):
+    if len(path) < 3:
+        return path
+        
+    is_closed = np.linalg.norm(path[0] - path[-1]) < 1e-6
+    p = path[:-1] if is_closed else path
+    n = len(p)
+    
+    corners = set()
+    for i in range(n):
+        if not is_closed and (i == 0 or i == n - 1):
+            continue
+        prev_idx = (i - 1) % n
+        next_idx = (i + 1) % n
+        A, B, C = p[prev_idx], p[i], p[next_idx]
+        v1, v2 = B - A, C - B
+        l1, l2 = np.linalg.norm(v1), np.linalg.norm(v2)
+        if l1 > 1e-6 and l2 > 1e-6 and np.dot(v1, v2) / (l1 * l2) < 0.99:
+            corners.add(i)
+            
+    new_path = []
+    consumed = set()
+    
+    for i in range(n):
+        if i in consumed:
+            continue
+            
+        if i in corners:
+            prev_idx = (i - 1) % n
+            next_idx = (i + 1) % n
+            A = p[prev_idx].astype(np.float64)
+            B = p[i].astype(np.float64)
+            C = p[next_idx].astype(np.float64)
+            
+            t = np.linspace(0, 1, num_pts)[:, np.newaxis]
+            bezier = (1-t)**2 * A + 2*(1-t)*t * B + t**2 * C
+            
+            if len(new_path) > 0 and np.linalg.norm(new_path[-1] - A) < 1e-6:
+                new_path.pop()
+                
+            for pt in bezier:
+                if len(new_path) == 0 or np.linalg.norm(new_path[-1] - pt) > 1e-6:
+                    new_path.append(pt)
+                
+            consumed.add(next_idx)
+        else:
+            pt = p[i]
+            if len(new_path) == 0 or np.linalg.norm(new_path[-1] - pt) > 1e-6:
+                new_path.append(pt)
+                
+    if is_closed and len(new_path) > 0:
+        if np.linalg.norm(new_path[0] - new_path[-1]) > 1e-6:
+            new_path.append(new_path[0])
+            
+    return np.array(new_path)
 
 
 def _build_arc_index(smooth_pts):
@@ -120,11 +165,21 @@ class PathRenderer:
         self.total_arc = np.sum(np.linalg.norm(diffs, axis=1))
 
         # --- Precompute smoothed path ---
+        bezier_path = bezier_corners(self.path_polyline, num_pts=20)
+        diffs_bez = np.diff(bezier_path, axis=0)
+        total_bez = np.sum(np.linalg.norm(diffs_bez, axis=1))
+        
         dense_pts = sample_path_by_arc(
-            self.path_polyline, 0.0, self.total_arc, spacing=2.0)
-        self.smooth_pts = chaikin_smooth(dense_pts, iterations=3)
+            bezier_path, 0.0, total_bez, spacing=2.0)
+        
+        self.smooth_pts = dense_pts
         self.smooth_arc_index = _build_arc_index(self.smooth_pts)
         self.smooth_pts_int = np.int32(np.round(self.smooth_pts))
+
+        # ---------- NEW: make the smooth path the official polyline ----------
+        self.path_polyline = self.smooth_pts                      # float64 smooth path
+        self.total_arc = self.smooth_arc_index[-1]                # total smooth arc length
+        # ----------------------------------------------------------------------
 
         # --- Build a WRAPPED version of the smooth path for lookahead ---
         # Append one extra copy so arc math can continue past the seam.
@@ -145,35 +200,26 @@ class PathRenderer:
         Return smooth points between arc_start and arc_end, wrapping around
         the loop seam if arc_end > total_arc.
         """
-        if arc_end <= self.total_arc:
+
+        smooth_total = self.smooth_arc_index[-1]  # ← not self.total_arc
+
+        if arc_end <= smooth_total:
             # Normal case: no wrap needed, use the plain index
             idx_start = np.searchsorted(
                 self.smooth_arc_index, arc_start, side='left')
-            idx_end = np.searchsorted(
-                self.smooth_arc_index, arc_end, side='right')
-            idx_start = max(0, idx_start - 1)
-            idx_end = min(len(self.smooth_pts_int), idx_end + 1)
+            idx_end   = min(len(self.smooth_pts_int),
+                        np.searchsorted(self.smooth_arc_index, arc_end, side='right') + 1)
             return self.smooth_pts_int[idx_start:idx_end]
         else:
             # Wrap case: slice from arc_start to end-of-loop, then 0 to remainder
-            remainder = arc_end - self.total_arc
-
-            # Part 1: arc_start → total_arc
-            idx_start = np.searchsorted(
-                self.smooth_arc_index, arc_start, side='left')
-            idx_start = max(0, idx_start - 1)
-            part1 = self.smooth_pts_int[idx_start:]
-
-            # Part 2: 0 → remainder (beginning of the loop)
-            idx_end = np.searchsorted(
-                self.smooth_arc_index, remainder, side='right')
-            idx_end = min(len(self.smooth_pts_int), idx_end + 1)
-            part2 = self.smooth_pts_int[:idx_end]
-
-            if len(part1) == 0:
-                return part2
-            if len(part2) == 0:
-                return part1
+            remainder = arc_end - smooth_total
+            idx_start = max(0, np.searchsorted(self.smooth_arc_index, arc_start, side='left') - 1)
+            part1     = self.smooth_pts_int[idx_start:]
+            idx_end   = min(len(self.smooth_pts_int),
+                            np.searchsorted(self.smooth_arc_index, remainder, side='right') + 1)
+            part2     = self.smooth_pts_int[:idx_end]
+            if len(part1) == 0: return part2
+            if len(part2) == 0: return part1
             return np.concatenate([part1, part2], axis=0)
 
     def generate_cnn_frame(self, frame, predetected=None, draw_lookahead=True, black_bg = False, ):
@@ -220,27 +266,29 @@ class PathRenderer:
         cy = int(np.mean(c[:, 1]))
 
         if not black_bg:    
-            cv2.polylines(frame, [np.int32(self.path_polyline)], False, (128, 128, 128),
+            cv2.polylines(frame, [self.smooth_pts_int], False, (128, 128, 128),
                         self.track_thickness, cv2.LINE_8)
             cv2.addWeighted(frame, 0.9, output, 0.6, 0, output)
         else:
-            cv2.polylines(output, [np.int32(self.path_polyline)], False, (80, 80, 80),
+            cv2.polylines(output, [self.smooth_pts_int], False, (80, 80, 80),
                   self.track_thickness, cv2.LINE_8)
 
         # Heading from ArUco top edge
-        top_mid_x    = (c[2][0] + c[3][0]) / 2.0
-        top_mid_y    = (c[2][1] + c[3][1]) / 2.0
-        bottom_mid_x = (c[0][0] + c[1][0]) / 2.0
-        bottom_mid_y = (c[0][1] + c[1][1]) / 2.0
+        # ArUco: [0]=TL  [1]=TR  [2]=BR  [3]=BL
+        top_mid_x    = (c[0][0] + c[1][0]) / 2.0   # TL + TR = top edge
+        top_mid_y    = (c[0][1] + c[1][1]) / 2.0
+        bottom_mid_x = (c[2][0] + c[3][0]) / 2.0   # BR + BL = bottom edge
+        bottom_mid_y = (c[2][1] + c[3][1]) / 2.0
 
-        # Car heading angle in warped-frame space
         angle = math.atan2(top_mid_y - bottom_mid_y, top_mid_x - bottom_mid_x)
         cos_a, sin_a = math.cos(angle), math.sin(angle)
 
         # --- Project car onto path → CTE + heading error ---
-        car_arc, signed_cte, _, tangent = project_onto_path(cx, cy, self.path_polyline)
-        raw_dist = abs(signed_cte)
-        on_path = raw_dist < self.grid_size
+        car_arc_raw, signed_cte, _, tangent = project_onto_path(cx, cy, self.path_polyline)
+
+        total_smooth   = self.total_arc
+
+        on_path = abs(signed_cte) < (self.grid_size // 2)
 
         # Heading Error: difference between car angle and path tangle angle
         path_angle    = math.atan2(float(tangent[1]), float(tangent[0]))
@@ -250,37 +298,39 @@ class PathRenderer:
         metrics = {
             'cte':           signed_cte if on_path else 0.0,
             'heading_error': heading_error if on_path else 0.0,
-            'car_arc':       car_arc,
+            'car_arc':       car_arc_raw,
             'on_path':       on_path,
         }
 
         if on_path:
             # path tangent 
-            idx = np.searchsorted(self.smooth_arc_index, car_arc)
+            idx = np.searchsorted(self.smooth_arc_index, car_arc_raw)
             idx = np.clip(idx, 0, len(self.smooth_pts_int) - 6)
             p1 = self.smooth_pts_int[idx]
             p2 = self.smooth_pts_int[idx + 5]
             path_dx = float(p2[0] - p1[0])
             path_dy = float(p2[1] - p1[1])
             dot   = cos_a * path_dx + sin_a * path_dy
-        
+
+            slice_pts = np.empty((0, 2), dtype=np.int32) 
+            
             if dot >= 0:
                 # Clockwise — normal case
-                arc_start = max(0.0, car_arc - self.backward_px)
-                arc_end = car_arc + self.forward_px
+                arc_start = max(0.0, car_arc_raw - self.backward_px)
+                arc_end = car_arc_raw + self.forward_px
                 slice_pts = self._slice_smooth_path(arc_start, arc_end)
             else:
                 # Counter-clockwise — forward/backward are flipped
-                raw_start = car_arc - self.forward_px
-                raw_end = min(self.total_arc, car_arc + self.backward_px)
+                arc_start = car_arc_raw - self.forward_px
+                arc_end = min(total_smooth, car_arc_raw + self.backward_px)
 
-                if raw_start >= 0:
-                    slice_pts = self._slice_smooth_path(raw_start, raw_end)
+                if arc_start >= 0:
+                    slice_pts = self._slice_smooth_path(arc_start, arc_end)
                 else:
                     # raw_start is negative, wrap it to end of loop
-                    wrapped_start = self.total_arc + raw_start
-                    part1 = self._slice_smooth_path(wrapped_start, self.total_arc)
-                    part2 = self._slice_smooth_path(0.0, raw_end)
+                    wrapped_start = total_smooth + arc_start
+                    part1 = self._slice_smooth_path(wrapped_start, total_smooth)
+                    part2 = self._slice_smooth_path(0.0, arc_end)
                     if len(part1) > 0 and len(part2) > 0:
                         slice_pts = np.concatenate([part1, part2], axis=0)
                     elif len(part1) > 0:
@@ -309,7 +359,7 @@ class PathRenderer:
             ly = int(cy + sin_a * 35)
             cv2.line(output, (cx, cy), (lx, ly), (0, 255, 0), 4, cv2.LINE_8)
 
-        cv2.polylines(output, [np.int32(self.path_polyline)], False, (0, 255, 255),
+        cv2.polylines(output, [self.smooth_pts_int], False, (0, 255, 255),
               max(2, self.track_thickness // 30
                   ), cv2.LINE_8)
         
@@ -320,10 +370,10 @@ class PathRenderer:
             c = self.last_corners
             cx = int(np.mean(c[:, 0]))
             cy = int(np.mean(c[:, 1]))
-            car_arc, signed_cte, _, _ = project_onto_path(cx, cy, self.path_polyline)
+            car_arc_raw, signed_cte, _, _ = project_onto_path(cx, cy, self.path_polyline)
             cv2.putText(
                 frame,
-                f"car:({cx},{cy}) arc={car_arc:.0f}/{self.total_arc:.0f} "
+                f"car:({cx},{cy}) arc={car_arc_raw:.0f}/{self.total_arc:.0f} "
                 f"cte={signed_cte:.1f}px",
                 (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA,
             )
