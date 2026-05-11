@@ -1,0 +1,176 @@
+import cv2
+import numpy as np
+from collections import deque
+
+
+def create_gridmap(width, height, grid_size):
+    grid = {}
+    for i in range(width//grid_size):
+        for j in range(height // grid_size):
+            grid[(i,j)] = f"({i},{j})"
+            
+def get_first_path_point():
+    with open('path.txt', 'r') as f:
+        line = f.readline().strip()
+        x, y = map(int, line.split(','))
+        return (x, y)
+
+
+def load_path_points():
+    """Load all waypoints from path.txt."""
+    points = []
+    try:
+        with open('path.txt', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    x, y = map(int, line.split(','))
+                    points.append((x, y))
+    except FileNotFoundError:
+        pass
+    return points
+
+
+def catmull_rom_segment(p0, p1, p2, p3, num_points=20):
+    """Interpolate a single Catmull-Rom segment between p1 and p2."""
+    p0, p1, p2, p3 = np.array(p0), np.array(p1), np.array(p2), np.array(p3)
+    ts = np.linspace(0, 1, num_points, endpoint=False)
+    pts = []
+    for t in ts:
+        t2, t3 = t*t, t*t*t
+        pt = 0.5 * (
+            (2*p1) +
+            (-p0 + p2) * t +
+            (2*p0 - 5*p1 + 4*p2 - p3) * t2 +
+            (-p0 + 3*p1 - 3*p2 + p3) * t3
+        )
+        pts.append(tuple(pt.astype(int)))
+    return pts
+
+
+def smooth_path_catmull_rom(points, angle_threshold_deg=30, num_points_per_segment=10):
+    if len(points) < 3:
+        return list(points)
+
+    pts = [np.array(p) for p in points]
+    result = [tuple(pts[0])]
+
+    for i in range(1, len(pts) - 1):
+        p_prev = pts[i - 1]
+        p_curr = pts[i]
+        p_next = pts[i + 1]
+
+        v1 = p_curr - p_prev
+        v2 = p_next - p_curr
+
+        norm1 = np.linalg.norm(v1)
+        norm2 = np.linalg.norm(v2)
+
+        if norm1 < 1e-6 or norm2 < 1e-6:
+            result.append(tuple(p_curr))
+            continue
+
+        cos_angle = np.dot(v1, v2) / (norm1 * norm2)
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        angle_deg = np.degrees(np.arccos(cos_angle))
+
+        if angle_deg > angle_threshold_deg:
+            # Corner — insert a smooth arc ONLY around this waypoint
+            # Go halfway from prev→curr and halfway from curr→next
+            half_in  = (p_prev + p_curr) / 2.0
+            half_out = (p_curr + p_next) / 2.0
+
+            # Straight line up to the corner entry
+            result.append(tuple(half_in.astype(int)))
+
+            # Smooth arc from half_in → p_curr → half_out
+            segment = catmull_rom_segment(p_prev, half_in, half_out, p_next,
+                                          num_points=num_points_per_segment)
+            result.extend(segment)
+
+            # half_out becomes the new "last point" so next segment starts from here
+            result.append(tuple(half_out.astype(int)))
+        else:
+            result.append(tuple(p_curr))
+
+    result.append(tuple(pts[-1]))
+    return result
+
+
+def load_path_line(frame):
+    points = load_path_points()
+    smooth = smooth_path_catmull_rom(points)
+    for i in range(len(smooth) - 1):
+        cv2.line(frame, smooth[i], smooth[i+1], (255, 165, 0), 1)
+        
+def find_grid_path(start_px, target_px, grid_size=128):
+    """BFS from start pixel to the grid cell containing target pixel, moving through adjacent grids."""
+    start_cell = (start_px[0] // grid_size, start_px[1] // grid_size)
+    target_cell = (target_px[0] // grid_size, target_px[1] // grid_size)
+
+    if start_cell == target_cell:
+        return [start_px, target_px]
+
+    queue = deque()
+    queue.append(start_cell)
+    visited = {start_cell: None}
+
+    # 4-connected neighbors (right, left, down, up)
+    directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+
+    while queue:
+        current = queue.popleft()
+        if current == target_cell:
+            break
+        for d in directions:
+            neighbor = (current[0] + d[0], current[1] + d[1])
+            if neighbor not in visited and neighbor[0] >= 0 and neighbor[1] >= 0:
+                visited[neighbor] = current
+                queue.append(neighbor)
+
+    # Reconstruct path
+    if target_cell not in visited:
+        return []
+
+    path_cells = []
+    cell = target_cell
+    while cell is not None:
+        path_cells.append(cell)
+        cell = visited[cell]
+    path_cells.reverse()
+
+    # Convert grid cells to center pixel coordinates
+    path_pts = []
+    for c in path_cells:
+        cx = c[0] * grid_size + grid_size // 2
+        cy = c[1] * grid_size + grid_size // 2
+        path_pts.append((cx, cy))
+    return path_pts
+
+
+def draw_grid_path(frame, grid_path, num_blocks=3):
+    """Draw only the first num_blocks points of the grid path as a guide."""
+    visible = grid_path[:num_blocks + 1]  # show up to num_blocks segments
+    for i in range(len(visible) - 1):
+        cv2.line(frame, visible[i], visible[i + 1], (255, 255, 0), 3)
+        cv2.circle(frame, visible[i], 5, (255, 0, 255), -1)
+    if visible:
+        cv2.circle(frame, visible[-1], 5, (255, 0, 255), -1)
+
+
+def draw_grid(frame, grid_size=64):
+    height, width, _ = frame.shape
+    for x in range(0, height, grid_size):
+        cv2.line(frame, (x, 0), (x, height), (255, 255, 255), 1)
+    for y in range(0, width, grid_size):
+        cv2.line(frame, (0, y), (width, y), (255, 255, 255), 1)
+
+
+def draw_path(frame, path_points):
+    with open('path.txt', 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            x, y = map(int, line.strip().split(','))
+            path_points.append((x, y))
+        for i in range(len(path_points) - 1):
+            cv2.line(frame, path_points[i], path_points[i + 1], (0, 0, 255), 2)

@@ -3,6 +3,7 @@ import numpy as np
 import os
 import pickle
 from robot_aoi import ArenaWarper
+from path_utils import smooth_path_catmull_rom   # <-- new import
 import cv2.aruco as aruco
 
 ARENA_IDS = {24, 42, 66, 70}
@@ -20,9 +21,6 @@ shared_detector = aruco.ArucoDetector(shared_dict, aruco.DetectorParameters())
 
 def pixel_to_cell(x, y):
     return (x // GRID_SIZE, y // GRID_SIZE)
-
-def cell_center(col, row):
-    return (col * GRID_SIZE + GRID_SIZE // 2, row * grid_size + GRID_SIZE // 2)
 
 def cell_center(col, row):
     return (col * GRID_SIZE + GRID_SIZE // 2, row * GRID_SIZE + GRID_SIZE // 2)
@@ -56,26 +54,36 @@ def draw_overlays(warped):
     frame = warped.copy()
     height, width = frame.shape[:2]
 
+    # --- Filled cell highlights ---
     for col, row in highlighted_cells:
         top_left = (col * GRID_SIZE, row * GRID_SIZE)
         bottom_right = ((col + 1) * GRID_SIZE, (row + 1) * GRID_SIZE)
         cv2.rectangle(frame, top_left, bottom_right, (0, 200, 0), -1)
 
-    for i in range(len(highlighted_cells) - 1):
-        pt1 = cell_center(*highlighted_cells[i])
-        pt2 = cell_center(*highlighted_cells[i + 1])
-        cv2.line(frame, pt1, pt2, (0, 255, 100), 2)
+    # --- Smooth curved path preview ---
+    if len(highlighted_cells) >= 2:
+        waypoint_pixels = [cell_center(col, row) for col, row in highlighted_cells]
+        smooth = smooth_path_catmull_rom(waypoint_pixels, angle_threshold_deg=30, num_points_per_segment=10)
+        for i in range(len(smooth) - 1):
+            cv2.line(frame, smooth[i], smooth[i + 1], (0, 255, 100), 2)
+    elif len(highlighted_cells) == 1:
+        # Single point: just draw a dot so you know it's registered
+        pt = cell_center(*highlighted_cells[0])
+        cv2.circle(frame, pt, 4, (0, 255, 100), -1)
 
+    # --- Waypoint labels ---
     for idx, cell in enumerate(highlighted_cells):
         cx, cy = cell_center(*cell)
         cv2.putText(frame, str(idx + 1), (cx - 6, cy + 6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
+    # --- Grid lines ---
     for x in range(0, width, GRID_SIZE):
         cv2.line(frame, (x, 0), (x, height), (200, 200, 200), 1)
     for y in range(0, height, GRID_SIZE):
         cv2.line(frame, (0, y), (width, y), (200, 200, 200), 1)
 
+    # --- HUD text ---
     cv2.putText(frame, f"Waypoints: {len(highlighted_cells)}", (8, 20),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1, cv2.LINE_AA)
     cv2.putText(frame, "L-Click: add  |  R-Click: undo  |  Q: save & quit",
@@ -110,7 +118,7 @@ def load_existing_path():
 def main():
     load_existing_path()
 
-    cap = cv2.VideoCapture(3)
+    cap = cv2.VideoCapture(2)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 

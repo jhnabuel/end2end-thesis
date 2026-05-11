@@ -29,7 +29,8 @@ ROBOT_IP          = '192.168.0.2'
 PORT              = 5000
 DEADZONE          = 0.1
 CONTROL_HZ        = 30          # UDP send rate (independent of render rate)
-RENDER_HZ         = 20          # Main loop / display rate
+RENDER_HZ         = 60          # Main loop / display rate — raised from 20 to 60
+                                 # so joystick inputs are polled 3× more often
 CONTROL_INTERVAL  = 1.0 / CONTROL_HZ
 FRAME_INTERVAL    = 1.0 / RENDER_HZ
 CATALOG_FILE      = "../data/catalog_0.catalog"
@@ -291,7 +292,10 @@ def main():
     cte           = 0.0
     heading_error = 0.0
     seg_idx       = 0
-    speed    = 0
+    on_path       = False
+    frame         = None
+    save_frame    = None
+    speed         = 0
     steering = 0
     is_ai_mode   = False
     is_recording = False
@@ -304,6 +308,11 @@ def main():
     ]
     for t in threads:
         t.start()
+
+    # Create the overhead BEV window on the main thread so OpenCV/GTK
+    # never has to initialise it from the camera thread.
+    cv2.namedWindow("Path View", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Path View", 1000, 1000)
 
     next_frame_time = time.time()
 
@@ -399,14 +408,21 @@ def main():
 
             try:
                 frame, save_frame, metrics = frame_queue.get_nowait()
-                cte = metrics.get('cte', 0.0)
-                heading_error = metrics.get('heading_error', 0.0)
-                seg_idx = metrics.get('seg_idx', 0)
+                cte = metrics.get('cte', cte)
+                heading_error = metrics.get('heading_error', heading_error)
+                seg_idx = metrics.get('seg_idx', seg_idx)
+                # Show the overhead BEV window here (main thread) rather than
+                # inside the camera generator, which avoids OpenCV/GTK
+                # cross-thread issues and removes waitKey from the hot path.
+                if frame is not None:
+                    cv2.imshow("Path View", frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        stop_event.set()
 
             except Empty:
-                frame, save_frame, metrics = None, None, {}
-                cte = heading_error = 0.0
-                seg_idx = 0
+                # No new camera frame this tick — reuse last known values so
+                # the display doesn't flicker and AI mode keeps running.
+                frame = None
 
             if is_ai_mode and engine is not None:
                 if save_frame is not None:
@@ -522,6 +538,7 @@ def main():
         stop_event.set()
         for t in threads:
             t.join(timeout=2.0)
+        cv2.destroyAllWindows()
         pygame.quit()
 
 
