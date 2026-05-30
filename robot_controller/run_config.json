@@ -1,0 +1,14 @@
+{
+  "track_id": "u_turn_180",
+  "scenario": 3,
+  "is_held_out": false,
+  "model_id": "dave2_ego_v6",
+  "operator": "R",
+  "battery_v": null,
+  "loop_hz_target": 20,
+  "px_per_cm": null,
+  "lane_half_width_px": 40.0,
+  "marker_lost_fail_frames": 30,
+  "lap_start_radius_px": 30.0,
+  "notes": ""
+}

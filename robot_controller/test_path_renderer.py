@@ -54,7 +54,7 @@ def load_path_polyline(grid_size):
 
 
 def main_path_renderer():
-    cap = cv2.VideoCapture(3)
+    cap = cv2.VideoCapture(2)
     if not cap.isOpened():
         print("ERROR: Cannot open camera")
         return
@@ -142,6 +142,10 @@ def main_path_renderer():
         out, _, _ = renderer.generate_cnn_frame(
             warped, predetected=predetected, black_bg=False)
 
+        # --- Allocentric black canvas (for recording toggle) ---
+        allocentric_black, _, _ = renderer.generate_cnn_frame(
+            warped, predetected=predetected, black_bg=True)
+
         # --- Egocentric save frame + metrics (black canvas for data collection) ---
         if ego_renderer is not None:
             ego_result = ego_renderer.process_egocentric_frame(
@@ -160,7 +164,7 @@ def main_path_renderer():
 
         # Yield immediately — no sleep here.  The caller (camera_thread in
         # robot-client) is responsible for any rate limiting it needs.
-        yield out, save_frame, metrics
+        yield out, save_frame, metrics, allocentric_black
         # note 2nd session: out out metrics, after 2nd session: out, save_frame, metrics
     cap.release()
     cv2.destroyAllWindows()
@@ -170,7 +174,7 @@ if __name__ == "__main__":
     cv2.namedWindow("Path View", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Path View", 1000, 1000)
     print("Press 'q' to quit.")
-    for out, _, _ in main_path_renderer():
+    for out, _, _, _ in main_path_renderer():
         cv2.imshow("Path View", out)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break

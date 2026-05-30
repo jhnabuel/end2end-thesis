@@ -17,6 +17,10 @@ class EgocentricRenderer:
         _empty_metrics = {
             'cte': 0.0, 'heading_error': 0.0,
             'car_arc': 0.0, 'on_path': False,
+            'cx': None, 'cy': None,
+            'nearest_x': None, 'nearest_y': None,
+            'seg_idx': 0, 'n_path_points': None,
+            'path_start': None,
         }
 
         frame, corners, metrics = self.path_renderer.generate_cnn_frame(

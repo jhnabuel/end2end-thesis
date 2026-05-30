@@ -21,6 +21,7 @@ import math
 
 from test_path_renderer import main_path_renderer
 from inference import InferenceEngine
+from run_logger import RunLogger, load_run_config
 
 # ---------------------------------------------------------------------------
 # Config
@@ -28,11 +29,15 @@ from inference import InferenceEngine
 ROBOT_IP          = '192.168.0.2'
 PORT              = 5000
 DEADZONE          = 0.1
-CONTROL_HZ        = 30          # UDP send rate (independent of render rate)
+CONTROL_HZ        = 20          # UDP send rate (independent of render rate)
 RENDER_HZ         = 60          # Main loop / display rate — raised from 20 to 60
-                                 # so joystick inputs are polled 3× more often
+                                # so joystick inputs are polled 3× more often
+INFERENCE_HZ      = 20          # Max rate at which AI inference runs
+RECORDING_HZ      = 10          # Max rate at which training frames are saved to disk
 CONTROL_INTERVAL  = 1.0 / CONTROL_HZ
 FRAME_INTERVAL    = 1.0 / RENDER_HZ
+INFERENCE_INTERVAL = 1.0 / INFERENCE_HZ
+RECORDING_INTERVAL = 1.0 / RECORDING_HZ
 CATALOG_FILE      = "../data/catalog_0.catalog"
 IMAGE_DIR         = "../data/images"
 DELETE_COUNT      = 60
@@ -181,13 +186,13 @@ def camera_thread():
         result = next(camera_generator, None)
         if result is None:
             break
-        frame, save_frame, metrics = result
+        frame, save_frame, metrics, allocentric_frame = result
         if frame_queue.full():
             try:
                 frame_queue.get_nowait()
             except Empty:
                 pass
-        frame_queue.put((frame, save_frame, metrics))
+        frame_queue.put((frame, save_frame, metrics, allocentric_frame))
     stop_event.set()
 
 
@@ -254,8 +259,12 @@ def main():
     current_paddle = 0
     pygame.init()
     pygame.joystick.init()
-    joystick = pygame.joystick.Joystick(0)
-    joystick.init()
+    joystick = None
+    if pygame.joystick.get_count() > 0:
+        joystick = pygame.joystick.Joystick(0)
+        joystick.init()
+    else:
+        print("[WARN] No joystick detected. Falling back to keyboard controls.")
 
     screen = pygame.display.set_mode((420, 340))
     pygame.display.set_caption("Robot Telemetry")
@@ -287,6 +296,36 @@ def main():
     # CTE tracking (AI evaluation run)
     cte_tracker = CTETracker()
     run_log     = []
+    run_logger  = None                       # structured RunLogger (created on AI enable)
+
+    # Training-data tagging (Step 6): track id from run_config, cycling driving mode
+    _run_cfg        = load_run_config()
+    record_track_id = _run_cfg.get('track_id', 'unknown_track')
+    driving_modes   = ['nominal', 'aggressive', 'recovery']
+    driving_mode    = driving_modes[0]
+
+    def handle_ai_toggle():
+        """Toggle AI mode; create a RunLogger on enable, finalize it on disable."""
+        nonlocal run_logger
+        with state_lock:
+            shared_state['is_ai_mode'] = not shared_state['is_ai_mode']
+            mode = shared_state['is_ai_mode']
+            if mode:
+                shared_state['steering'] = 0
+        print(f"[AI] AI mode {'ENABLED' if mode else 'DISABLED'}.")
+        if mode:
+            run_logger = RunLogger(config=load_run_config(), start_pose=None)
+            cte_tracker.reset()
+            print(f"[RUN] Logging trial {run_logger.trial_idx} "
+                  f"track={run_logger.meta['track_id']} model={run_logger.meta['model_id']}")
+        else:
+            if run_logger is not None:
+                path = run_logger.finalize()
+                if path:
+                    print(f"[RUN LOG] {len(run_logger.frames)} frames "
+                          f"({run_logger._measured_hz()} Hz) -> {path}")
+                run_logger = None
+            cte_tracker.reset()
 
     # Safe defaults so display never crashes before first loop tick
     cte           = 0.0
@@ -295,11 +334,13 @@ def main():
     on_path       = False
     frame         = None
     save_frame    = None
+    allocentric_frame = None
     speed         = 0
     steering = 0
     is_ai_mode   = False
     is_recording = False
     is_stop      = False
+    record_use_allocentric = True
 
     threads = [
         threading.Thread(target=camera_thread,      daemon=True),
@@ -314,7 +355,9 @@ def main():
     cv2.namedWindow("Path View", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Path View", 1000, 1000)
 
-    next_frame_time = time.time()
+    next_frame_time     = time.time()
+    next_inference_time = time.time()
+    next_record_time    = time.time()
 
     try:
         while not stop_event.is_set():
@@ -329,6 +372,56 @@ def main():
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     stop_event.set()
+
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        stop_event.set()
+
+                    if event.key == pygame.K_v:
+                        record_use_allocentric = not record_use_allocentric
+                        mode = "allocentric" if record_use_allocentric else "egocentric"
+                        print(f"[RECORD] Frame source: {mode}")
+
+                    # Keyboard controls mirror joystick features
+                    if event.key == pygame.K_r:
+                        with state_lock:
+                            shared_state['is_recording'] = not shared_state['is_recording']
+                            mode = shared_state['is_recording']
+                        print("Recording Started." if mode else "Recording Stopped.")
+
+                    elif event.key == pygame.K_BACKSPACE:
+                        drained = 0
+                        while not record_queue.empty():
+                            try:
+                                record_queue.get_nowait()
+                                drained += 1
+                            except Empty:
+                                break
+                        if drained:
+                            print(f"[DELETE] Drained {drained} pending frames from queue.")
+                        n = delete_last_n_frames(DELETE_COUNT, record_index_ref)
+                        delete_flash_msg   = f"Deleted {n} frames!"
+                        delete_flash_until = time.time() + 2.0
+
+                    elif event.key == pygame.K_m:
+                        if not ai_available:
+                            print("[AI] Model not loaded — AI mode unavailable.")
+                        else:
+                            handle_ai_toggle()
+
+                    elif event.key == pygame.K_t:
+                        # Cycle training-data driving mode (Step 6)
+                        driving_mode = driving_modes[
+                            (driving_modes.index(driving_mode) + 1) % len(driving_modes)]
+                        print(f"[RECORD] Driving mode: {driving_mode}")
+
+                    elif event.key == pygame.K_UP:
+                        current_paddle = min(current_paddle + 1, 3)
+                        print(f"[GEAR] Paddle: {current_paddle}")
+
+                    elif event.key == pygame.K_DOWN:
+                        current_paddle = max(current_paddle - 1, 0)
+                        print(f"[GEAR] Paddle: {current_paddle}")
 
                 if event.type == pygame.JOYBUTTONDOWN:
                     # Button 2 → toggle recording
@@ -358,34 +451,7 @@ def main():
                         if not ai_available:
                             print("[AI] Model not loaded — AI mode unavailable.")
                         else:
-                            with state_lock:
-                                shared_state['is_ai_mode'] = not shared_state['is_ai_mode']
-                                mode = shared_state['is_ai_mode']
-                                if mode:
-                                    shared_state['steering'] = 0  # reset EMA seed on activation
-                            print(f"[AI] AI mode {'ENABLED' if mode else 'DISABLED'}.")
-
-                             # Turning AI mode OFF → dump run log
-                            if not mode and run_log:
-                                run_ts   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                                log_path = os.path.join(
-                                    os.path.dirname(CATALOG_FILE),
-                                    f"run_log_{run_ts}.json"
-                                )
-                                summary = {
-                                    'rmse_px':         round(cte_tracker.rmse, 4),
-                                    'mean_abs_cte_px': round(cte_tracker.mean_abs, 4),
-                                    'total_frames':    cte_tracker.count,
-                                    'frames':          run_log,
-                                }
-                                with open(log_path, 'w') as f:
-                                    json.dump(summary, f, indent=2)
-                                print(
-                                    f"[RUN LOG] RMSE={cte_tracker.rmse:.2f}px "
-                                    f"→ {log_path}"
-                                )
-                                cte_tracker.reset()
-                                run_log.clear()
+                            handle_ai_toggle()
 
                     # Button 4 → gear down
                     elif event.button == 4:
@@ -399,18 +465,37 @@ def main():
 
             paddle_speed = {0: 0, 1: 0.45, 2: 0.65, 3: 0.85}
 
-            raw_steer = joystick.get_axis(3)   # right stick X
-            is_stop   = joystick.get_button(1) # B / Circle
+            if joystick is not None:
+                raw_steer = joystick.get_axis(3)   # right stick X
+                is_stop   = joystick.get_button(1) # B / Circle
+            else:
+                keys = pygame.key.get_pressed()
+                raw_steer = 0.0
+                if keys[pygame.K_LEFT]:
+                    raw_steer = -1.0
+                elif keys[pygame.K_RIGHT]:
+                    raw_steer = 1.0
+                is_stop = keys[pygame.K_SPACE]
 
             with state_lock:
                 is_ai_mode   = shared_state['is_ai_mode']
                 is_recording = shared_state['is_recording']
 
+            got_new_frame = False
             try:
-                frame, save_frame, metrics = frame_queue.get_nowait()
+                frame, save_frame, metrics, allocentric_frame = frame_queue.get_nowait()
+                got_new_frame = True
                 cte = metrics.get('cte', cte)
                 heading_error = metrics.get('heading_error', heading_error)
                 seg_idx = metrics.get('seg_idx', seg_idx)
+                # Robot position / nearest path point — logged if the renderer
+                # surfaces them in `metrics` (forward-compatible; None otherwise).
+                robot_cx   = metrics.get('cx')
+                robot_cy   = metrics.get('cy')
+                nearest_x  = metrics.get('nearest_x')
+                nearest_y  = metrics.get('nearest_y')
+                n_path_pts = metrics.get('n_path_points')
+                path_start = metrics.get('path_start')
                 # Show the overhead BEV window here (main thread) rather than
                 # inside the camera generator, which avoids OpenCV/GTK
                 # cross-thread issues and removes waitKey from the hot path.
@@ -423,9 +508,16 @@ def main():
                 # No new camera frame this tick — reuse last known values so
                 # the display doesn't flicker and AI mode keeps running.
                 frame = None
+                robot_cx = robot_cy = nearest_x = nearest_y = None
+                n_path_pts = None
+                path_start = None
 
             if is_ai_mode and engine is not None:
-                if save_frame is not None:
+                now = time.time()
+                inference_due = now >= next_inference_time
+                if inference_due:
+                    next_inference_time = max(next_inference_time + INFERENCE_INTERVAL, now)
+                if got_new_frame and save_frame is not None and inference_due:
                     raw_speed = paddle_speed[current_paddle]
                     human_throttle = int(raw_speed * 100 * 0.5) if raw_speed > DEADZONE else 0
 
@@ -439,24 +531,46 @@ def main():
                     )
 
                     speed    = 0 if is_stop else human_throttle
-                    steering = 0 if is_stop else smooth_steering  # ← smooth, not 
-                    
-                    cte_tracker.update(cte)
-                    run_log.append({
-                        'frame':         record_index_ref[0],
-                        'timestamp_ms':  int(time.time() * 1000),
-                        'cte_px':        round(cte, 4),
-                        'heading_error': round(heading_error, 4),
-                        'heading_deg':   round(math.degrees(heading_error), 2),
-                        'steering':      steering,
-                        'speed':         speed,
-                        'seg_idx':       seg_idx,
-                    })
+                    steering = 0 if is_stop else smooth_steering  # smoothed AI steering
 
-                else:
-                    # Marker lost — hold last known values, don't predict
+                    # One telemetry row per NEW camera frame (Step 3 — fixes the
+                    # 60 Hz vs 20 Hz oversampling: log at the true perception rate).
+                    cte_tracker.update(cte)
+                    if run_logger is not None:
+                        run_logger.log_frame(
+                            frame_seq=record_index_ref[0],
+                            timestamp_ms=int(time.time() * 1000),
+                            cte_px=cte,
+                            heading_error=heading_error,
+                            steering=steering,
+                            speed=speed,
+                            marker_detected=True,
+                            ai_steering_raw=raw_ai_steering,
+                            cx=robot_cx, cy=robot_cy,
+                            nearest_x=nearest_x, nearest_y=nearest_y,
+                            seg_idx=seg_idx, n_path_points=n_path_pts,
+                            path_start_xy=path_start,
+                        )
+
+                elif got_new_frame and save_frame is None and inference_due:
+                    # New frame but marker lost — log the loss, hold zero command
                     speed    = 0
                     steering = 0
+                    if run_logger is not None:
+                        run_logger.log_frame(
+                            frame_seq=record_index_ref[0],
+                            timestamp_ms=int(time.time() * 1000),
+                            cte_px=cte,
+                            heading_error=heading_error,
+                            steering=steering,
+                            speed=speed,
+                            marker_detected=False,
+                            cx=robot_cx, cy=robot_cy,
+                            nearest_x=nearest_x, nearest_y=nearest_y,
+                            seg_idx=seg_idx, n_path_points=n_path_pts,
+                            path_start_xy=path_start,
+                        )
+                # else: no new camera frame this tick — retain last speed/steering
             else:
                 raw_speed = paddle_speed[current_paddle]
                 speed    = int(raw_speed * 100 * 0.5) if raw_speed > DEADZONE else 0
@@ -470,10 +584,15 @@ def main():
                 shared_state['is_stop']  = is_stop
 
             # --- Recording ---
-            if is_recording and frame is not None and save_frame is not None:
+            now = time.time()
+            record_due = now >= next_record_time
+            if record_due:
+                next_record_time = max(next_record_time + RECORDING_INTERVAL, now)
+            if is_recording and frame is not None and record_due:
                 current_date_str = datetime.now().strftime("%Y-%m-%d")
                 idx              = record_index_ref[0]
                 image_filename   = os.path.join(IMAGE_DIR, f"{current_date_str}_{idx}.jpg")
+                record_frame     = allocentric_frame if record_use_allocentric else save_frame
                 robot_data = {
                     'index':           idx,
                     'session_id':      current_date_str,
@@ -483,10 +602,14 @@ def main():
                     'user/mode':       'ai' if is_ai_mode else 'user',
                     'throttle':        speed,
                     'cte':             round(cte, 4),
-                    'heading_error':   round(heading_error, 4)
+                    'heading_error':   round(heading_error, 4),
+                    'track_id':        record_track_id,
+                    'driving_mode':    driving_mode,
                 }
-                if not record_queue.full():
-                    record_queue.put((image_filename, save_frame, robot_data))
+                if record_frame is not None and not record_queue.full():
+                    record_queue.put((image_filename, record_frame, robot_data))
+                elif record_frame is None:
+                    print(f"[WARN] No recordable frame available for #{idx} — skipped.")
                 else:
                     print(f"[WARN] record_queue full — frame #{idx} dropped. Disk writer may be too slow.")
                 record_index_ref[0] += 1
@@ -508,6 +631,8 @@ def main():
                       GREEN if is_recording else WHITE)
             
             draw_text(f"Gear: {current_paddle}", 20, y + 98)
+            draw_text(f"Mode: {driving_mode}", 200, y + 98,
+                      GREEN if is_recording else (120, 120, 120), small=True)
 
              # CTE Display
             cte_color = RED if abs(cte) > CTE_WARN_THRESHOLD else YELLOW
@@ -525,7 +650,18 @@ def main():
             pygame.draw.rect(screen, WHITE,  (370, 50, 30, 200), 2)
             pygame.draw.rect(screen, PURPLE if is_ai_mode else BLUE, (372, bar_y, 26, bar_height))
 
-            draw_text("Btn2=Rec  Btn3=Del60  Btn0=AI", 10, 306, (120, 120, 120), small=True)
+            record_mode_label = "ALLOC" if record_use_allocentric else "EGO"
+            if joystick is not None:
+                draw_text(
+                    f"Btn2=Rec  Btn3=Del60  Btn0=AI  V=Rec:{record_mode_label}",
+                    10, 306, (120, 120, 120), small=True
+                )
+            else:
+                draw_text(
+                    f"R=Rec  Bksp=Del60  M=AI  V=Rec:{record_mode_label}  "
+                    "Arrows=Steer/Gear  Space=Stop",
+                    10, 306, (120, 120, 120), small=True
+                )
 
             if time.time() < delete_flash_until:
                 draw_text(delete_flash_msg, 20, 282, RED)

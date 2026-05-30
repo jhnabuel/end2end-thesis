@@ -308,6 +308,10 @@ class PathRenderer:
         _empty_metrics = {
             'cte': 0.0, 'heading_error': 0.0,
             'car_arc': 0.0, 'on_path': False,
+            'cx': None, 'cy': None,
+            'nearest_x': None, 'nearest_y': None,
+            'seg_idx': 0, 'n_path_points': None,
+            'path_start': None,
         }
 
         # --- Guard: frame must match arena cache dimensions ---
@@ -399,7 +403,7 @@ class PathRenderer:
             # Shift hint into the middle of the wrapped array so the window
             # straddles the seam naturally.
             wrapped_hint = hint + self.total_arc
-            car_arc_wrapped, signed_cte, _, tangent = project_onto_path(
+            car_arc_wrapped, signed_cte, proj_pt, tangent = project_onto_path(
                 cx, cy,
                 self.smooth_pts_wrapped,
                 arc_index     = self.smooth_arc_wrapped,
@@ -409,7 +413,7 @@ class PathRenderer:
             # Map result back to [0, total_arc)
             car_arc_raw = car_arc_wrapped % self.total_arc
         else:
-            car_arc_raw, signed_cte, _, tangent = project_onto_path(
+            car_arc_raw, signed_cte, proj_pt, tangent = project_onto_path(
                 cx, cy,
                 self.path_polyline,
                 arc_index     = self.smooth_arc_index,
@@ -451,6 +455,18 @@ class PathRenderer:
             'heading_error': heading_error,
             'car_arc':       car_arc_raw,
             'on_path':       on_path,
+            # --- Position + progress surfaced for run logging ---
+            # (lap detection, completion %, trajectory plots).  Progress is
+            # expressed as arc-length so completion = car_arc / total_arc; the
+            # run logger reads it as seg_idx / (n_path_points - 1).
+            'cx':            cx,
+            'cy':            cy,
+            'nearest_x':     float(proj_pt[0]),
+            'nearest_y':     float(proj_pt[1]),
+            'seg_idx':       int(round(car_arc_raw)),
+            'n_path_points': int(self.total_arc) + 1,
+            'path_start':    (float(self.path_polyline[0][0]),
+                              float(self.path_polyline[0][1])),
         }
 
         if on_path:
