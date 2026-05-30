@@ -1,6 +1,11 @@
+import os
 import cv2
 import numpy as np
 from collections import deque
+
+# Resolve the active path file relative to this module, independent of CWD.
+PATHS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paths")
+PATH_FILE = os.path.join(PATHS_DIR, "path.txt")
 
 
 def create_gridmap(width, height, grid_size):
@@ -10,7 +15,7 @@ def create_gridmap(width, height, grid_size):
             grid[(i,j)] = f"({i},{j})"
             
 def get_first_path_point():
-    with open('path.txt', 'r') as f:
+    with open(PATH_FILE, 'r') as f:
         line = f.readline().strip()
         x, y = map(int, line.split(','))
         return (x, y)
@@ -20,7 +25,7 @@ def load_path_points():
     """Load all waypoints from path.txt."""
     points = []
     try:
-        with open('path.txt', 'r') as f:
+        with open(PATH_FILE, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -99,7 +104,7 @@ def draw_grid(frame, grid_size=64):
 
 
 def draw_path(frame, path_points):
-    with open('path.txt', 'r') as f:
+    with open(PATH_FILE, 'r') as f:
         lines = f.readlines()
         for line in lines:
             x, y = map(int, line.strip().split(','))

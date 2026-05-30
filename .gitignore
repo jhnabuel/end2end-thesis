@@ -12,6 +12,7 @@ build/
 .venv/
 venv/
 env/
+thesis/
 
 # Training artifacts – generated per-run, not committed
 car_trainer/checkpoints_*/
@@ -36,3 +37,6 @@ Thumbs.db
 # Editor
 .vscode/
 *.swp
+
+# Local agent / tooling
+.claude/

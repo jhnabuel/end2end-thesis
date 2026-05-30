@@ -11,6 +11,10 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 WINDOW_NAME = "Path Editor"
 
+# Resolve the active path file relative to this script, independent of CWD.
+PATHS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paths")
+PATH_FILE = os.path.join(PATHS_DIR, "path.txt")
+
 highlighted_cells = []
 cell_set = set()
 warper = ArenaWarper()
@@ -84,17 +88,18 @@ def draw_overlays(warped):
     return frame
 
 def save_path():
-    with open("path.txt", "w") as f:
+    os.makedirs(PATHS_DIR, exist_ok=True)
+    with open(PATH_FILE, "w") as f:
         for col, row in highlighted_cells:
             cx, cy = cell_center(col, row)
             f.write(f"{cx},{cy}\n")
-    print(f"[path_editor] Saved {len(highlighted_cells)} waypoints to path.txt")
+    print(f"[path_editor] Saved {len(highlighted_cells)} waypoints to {PATH_FILE}")
 
 def load_existing_path():
-    if not os.path.exists("path.txt"):
+    if not os.path.exists(PATH_FILE):
         return
     try:
-        with open("path.txt", "r") as f:
+        with open(PATH_FILE, "r") as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -105,12 +110,12 @@ def load_existing_path():
                         cell_set.add(cell)
         print(f"[path_editor] Loaded {len(highlighted_cells)} existing waypoints.")
     except Exception as e:
-        print(f"[path_editor] Could not load path.txt: {e}")
+        print(f"[path_editor] Could not load {PATH_FILE}: {e}")
 
 def main():
     load_existing_path()
 
-    cap = cv2.VideoCapture(3)
+    cap = cv2.VideoCapture(2)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
