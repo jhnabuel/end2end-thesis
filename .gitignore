@@ -38,5 +38,5 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Local agent / tooling
-.claude/
+
+end-to-end-autonomous-driving-paper/
